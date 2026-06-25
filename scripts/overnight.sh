@@ -47,7 +47,9 @@
 #   LOGBENCH_TARGET      Rust target triple to cross-compile for (e.g.
 #                        aarch64-unknown-linux-gnu). Unset => build for this host
 #                        (fine when the device shares this host's architecture).
-#   LOGBENCH_REMOTE_DIR  staging dir on the device. Default: /tmp/logbench-overnight.
+#   LOGBENCH_REMOTE_DIR  staging dir on the device. Default: ~/logbench-overnight
+#                        on the device. (We avoid /tmp by default because it is
+#                        often mounted noexec, which would refuse the binary.)
 #   LOGBENCH_SSH         ssh command. Default: "ssh". e.g. "ssh -p 2222 -i ~/key".
 #   LOGBENCH_SCP         scp command. Default: "scp". e.g. "scp -P 2222 -i ~/key".
 #   LOGBENCH_KEEP_REMOTE set to 1 to leave the staged binary/results on the device.
@@ -84,12 +86,14 @@ PER_RUN_TIMEOUT="${PER_RUN_TIMEOUT:-1800}"   # seconds; kill a wedged single run
 # locally and these are ignored.
 REMOTE="${LOGBENCH_REMOTE:-}"
 TARGET="${LOGBENCH_TARGET:-}"
-REMOTE_DIR="${LOGBENCH_REMOTE_DIR:-/tmp/logbench-overnight}"
+# Empty default => resolve to the device's home dir at staging time. We avoid
+# /tmp deliberately: it is frequently mounted `noexec` on hardened devices, which
+# would refuse to run the copied binary. The device's $HOME is reliably exec-OK.
+REMOTE_DIR="${LOGBENCH_REMOTE_DIR:-}"
 SSH="${LOGBENCH_SSH:-ssh}"
 SCP="${LOGBENCH_SCP:-scp}"
 KEEP_REMOTE="${LOGBENCH_KEEP_REMOTE:-0}"
-REMOTE_BIN_DIR="$REMOTE_DIR/bin"             # the executable lives in, and runs from, here
-REMOTE_BIN="$REMOTE_BIN_DIR/logbench"        # where the binary lands on the device
+# REMOTE_BIN_DIR / REMOTE_BIN are derived once REMOTE_DIR is finalized (staging).
 
 # SMOKE mode: a tiny, fast end-to-end validation of the whole pipeline.
 if [[ "${SMOKE:-0}" == "1" ]]; then
@@ -157,7 +161,7 @@ fi
 # Tidy up the device on exit (registered before staging so a failed setup that
 # already created the staging dir still gets cleaned up).
 remote_cleanup() {
-    [[ -n "$REMOTE" && "$KEEP_REMOTE" != "1" ]] || return 0
+    [[ -n "$REMOTE" && -n "$REMOTE_DIR" && "$KEEP_REMOTE" != "1" ]] || return 0
     # shellcheck disable=SC2086
     $SSH "$REMOTE" "rm -rf '$REMOTE_DIR'" >/dev/null 2>&1 || true
 }
@@ -165,6 +169,17 @@ trap remote_cleanup EXIT
 
 # shellcheck disable=SC2086  # $SSH/$SCP are intentionally word-split (may carry flags).
 if [[ -n "$REMOTE" ]]; then
+    # Finalize the staging dir. Default to the device's $HOME (resolved over SSH
+    # so all paths below stay absolute and exec-permitted); fall back to /tmp
+    # only if $HOME can't be read. An explicit LOGBENCH_REMOTE_DIR wins.
+    if [[ -z "$REMOTE_DIR" ]]; then
+        remote_home="$($SSH "$REMOTE" 'printf %s "${HOME:-}"' 2>/dev/null)"
+        [[ -n "$remote_home" ]] || remote_home="/tmp"
+        REMOTE_DIR="$remote_home/logbench-overnight"
+    fi
+    REMOTE_BIN_DIR="$REMOTE_DIR/bin"     # executable lives in, and runs from, here
+    REMOTE_BIN="$REMOTE_BIN_DIR/logbench"
+
     log "Remote device: $REMOTE — staging $BIN at $REMOTE:$REMOTE_BIN"
     if ! $SSH "$REMOTE" "mkdir -p '$REMOTE_BIN_DIR'" >>"$RUN_LOG" 2>&1; then
         log "ERROR: cannot SSH to $REMOTE (or mkdir '$REMOTE_BIN_DIR' failed); see $RUN_LOG"
