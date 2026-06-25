@@ -188,6 +188,37 @@ def cell_label(key):
             f"rate {rate} · {policy}")
 
 
+def cores_from_meta(meta):
+    """Best-effort integer core count from run_meta.json (None if unknown)."""
+    try:
+        return int(str(meta.get("cpu_count")).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def oversub_note(producers, cores):
+    """Markdown warning for a cell that runs more producers than cores, else None.
+
+    When `producers` exceeds the available cores the producer threads can't all
+    execute at once: the OS time-slices them, so each measured `log()` call also
+    pays context-switch / run-queue-wait time that has nothing to do with the
+    logger. On core-limited (e.g. embedded) hardware that thread-switching
+    overhead dominates the number, so the reader needs to know the cell is
+    measuring oversubscribed contention rather than the logger's intrinsic cost.
+    """
+    if cores is None or producers <= cores:
+        return None
+    return (
+        f"> ⚠️ **Oversubscribed: {producers} producer threads on {cores} core(s).** "
+        f"More producers than cores means they can't run simultaneously — the OS "
+        f"time-slices them, so the hot-path latency below includes "
+        f"context-switch and scheduler-wait time, not just the logger's own cost. "
+        f"On core-limited (embedded) hardware this thread-switching overhead "
+        f"dominates; read these as oversubscribed-contention figures, not the "
+        f"logger's intrinsic latency."
+    )
+
+
 # --- aggregation ------------------------------------------------------------
 
 # Metrics we summarise across trials. Lower-is-better unless noted.
@@ -240,6 +271,7 @@ def md_table(headers, rows):
 def report(run_dir, agg, meta, files):
     lines = []
     A = lines.append
+    cores = cores_from_meta(meta)
 
     A("# Rust logging crates — benchmark report\n")
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -290,6 +322,16 @@ def report(run_dir, agg, meta, files):
         "real-crate strategies pay their genuine timestamp/level/format/sink "
         "cost, which is the whole point of the comparison.\n"
     )
+    if cores is not None:
+        A(
+            f"This machine has **{cores} core(s)**. Workloads whose producer count "
+            f"exceeds that are **oversubscribed**: the producer threads can't all "
+            f"run at once, so the OS time-slices them and the measured hot-path "
+            f"latency includes context-switch / scheduler-wait time on top of the "
+            f"logger's own cost. Those workloads are flagged inline below — on a "
+            f"core-limited (embedded) device the thread-switching overhead, not the "
+            f"logger, is what dominates them.\n"
+        )
 
     # =====================================================================
     # Executive summary — pick a representative "primary" cell.
@@ -332,6 +374,9 @@ def report(run_dir, agg, meta, files):
     # Leaderboard at the primary cell (all strategies).
     # =====================================================================
     A(f"\n## Leaderboard — {cell_label(primary)}\n")
+    note = oversub_note(primary[2], cores)
+    if note:
+        A(note + "\n")
     A("Sorted by mean p99 hot-path latency (lower is better). `±` is the 95% CI "
       "half-width across trials; `CV` is the coefficient of variation "
       "(run-to-run noise).\n")
@@ -349,6 +394,9 @@ def report(run_dir, agg, meta, files):
     A("\n## All workloads\n")
     for cell in cells:
         A(f"### {cell_label(cell)}\n")
+        note = oversub_note(cell[2], cores)
+        if note:
+            A(note + "\n")
         A(leaderboard_table(agg[cell]))
         A("")
 
@@ -382,6 +430,13 @@ def report(run_dir, agg, meta, files):
         "- **Formatting is included on purpose.** Real-crate latencies include "
         "timestamp formatting and level filtering; the raw transport baselines "
         "do not. That gap *is* the cost of structured, human-readable logs.\n"
+        "- **More producers than cores = thread-switching bound.** Any workload "
+        "whose producer count exceeds this host's core count is oversubscribed "
+        "(flagged inline above): the producers can't run simultaneously, so the "
+        "measured hot-path latency is inflated by OS context-switch and "
+        "run-queue-wait time rather than reflecting the logger itself. This is "
+        "especially pronounced on core-limited embedded targets — to measure a "
+        "logger's intrinsic cost there, keep producers ≤ cores.\n"
     )
 
     write_files(run_dir, lines, agg, cells)
