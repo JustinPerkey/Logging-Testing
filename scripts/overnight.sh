@@ -88,7 +88,8 @@ REMOTE_DIR="${LOGBENCH_REMOTE_DIR:-/tmp/logbench-overnight}"
 SSH="${LOGBENCH_SSH:-ssh}"
 SCP="${LOGBENCH_SCP:-scp}"
 KEEP_REMOTE="${LOGBENCH_KEEP_REMOTE:-0}"
-REMOTE_BIN="$REMOTE_DIR/logbench"            # where the binary lands on the device
+REMOTE_BIN_DIR="$REMOTE_DIR/bin"             # the executable lives in, and runs from, here
+REMOTE_BIN="$REMOTE_BIN_DIR/logbench"        # where the binary lands on the device
 
 # SMOKE mode: a tiny, fast end-to-end validation of the whole pipeline.
 if [[ "${SMOKE:-0}" == "1" ]]; then
@@ -165,8 +166,8 @@ trap remote_cleanup EXIT
 # shellcheck disable=SC2086  # $SSH/$SCP are intentionally word-split (may carry flags).
 if [[ -n "$REMOTE" ]]; then
     log "Remote device: $REMOTE — staging $BIN at $REMOTE:$REMOTE_BIN"
-    if ! $SSH "$REMOTE" "mkdir -p '$REMOTE_DIR'" >>"$RUN_LOG" 2>&1; then
-        log "ERROR: cannot SSH to $REMOTE (or mkdir '$REMOTE_DIR' failed); see $RUN_LOG"
+    if ! $SSH "$REMOTE" "mkdir -p '$REMOTE_BIN_DIR'" >>"$RUN_LOG" 2>&1; then
+        log "ERROR: cannot SSH to $REMOTE (or mkdir '$REMOTE_BIN_DIR' failed); see $RUN_LOG"
         exit 1
     fi
     if ! $SCP -q "$BIN" "$REMOTE:$REMOTE_BIN" >>"$RUN_LOG" 2>&1; then
@@ -174,7 +175,9 @@ if [[ -n "$REMOTE" ]]; then
         exit 1
     fi
     $SSH "$REMOTE" "chmod +x '$REMOTE_BIN'" >>"$RUN_LOG" 2>&1 || true
-    if ! $SSH "$REMOTE" "'$REMOTE_BIN' --help" >>"$RUN_LOG" 2>&1; then
+    # Run from the bin directory (cd in, invoke by relative name) so the staged
+    # executable is exercised exactly as the trials will invoke it below.
+    if ! $SSH "$REMOTE" "cd '$REMOTE_BIN_DIR' && ./logbench --help" >>"$RUN_LOG" 2>&1; then
         log "ERROR: '$REMOTE_BIN' will not execute on $REMOTE."
         log "       Likely an architecture mismatch — set LOGBENCH_TARGET to the device's"
         log "       Rust target triple (e.g. aarch64-unknown-linux-gnu) to cross-compile."
@@ -295,13 +298,14 @@ run_case() {
     fi
 
     # Remote: build a quoted remote command (printf %q is safe for these simple
-    # values), run it on the device, then scp the JSON+CSV back.
+    # values), run it from the bin directory on the device, then scp the
+    # JSON+CSV back. Output paths are absolute, so the cd doesn't affect them.
     local r_logs="$REMOTE_DIR/run/logs" r_json="$REMOTE_DIR/run/out.json" r_csv="$REMOTE_DIR/run/out.csv"
     local qa="" a
     for a in "${common_args[@]}" --out-dir "$r_logs" --json "$r_json" --csv "$r_csv"; do
         qa+=" $(printf '%q' "$a")"
     done
-    local rcmd="mkdir -p $(printf '%q' "$r_logs") && $(printf '%q' "$REMOTE_BIN")$qa; rc=\$?; rm -rf $(printf '%q' "$r_logs"); exit \$rc"
+    local rcmd="mkdir -p $(printf '%q' "$r_logs") && cd $(printf '%q' "$REMOTE_BIN_DIR") && ./logbench$qa; rc=\$?; rm -rf $(printf '%q' "$r_logs"); exit \$rc"
     # shellcheck disable=SC2086  # $SSH/$SCP are intentionally word-split.
     timeout "$PER_RUN_TIMEOUT" $SSH "$REMOTE" "$rcmd" >>"$RUN_LOG" 2>&1 || return $?
     # shellcheck disable=SC2086

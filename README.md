@@ -227,7 +227,7 @@ are removed from the device on exit (keep them with `LOGBENCH_KEEP_REMOTE=1`).
 | ---------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
 | `LOGBENCH_REMOTE`      | *(unset)*               | `user@host` of the device. **Unset → ordinary local run.**                                       |
 | `LOGBENCH_TARGET`      | *(unset)*               | Rust target triple to cross-compile for (e.g. `aarch64-unknown-linux-gnu`). Unset → build for this host's architecture. |
-| `LOGBENCH_REMOTE_DIR`  | `/tmp/logbench-overnight` | Staging directory on the device.                                                               |
+| `LOGBENCH_REMOTE_DIR`  | `/tmp/logbench-overnight` | Staging directory on the device. The executable is placed in, and runs from, its `bin/` subdirectory. |
 | `LOGBENCH_SSH`         | `ssh`                   | SSH command, e.g. `ssh -p 2222 -i ~/key`.                                                         |
 | `LOGBENCH_SCP`         | `scp`                   | SCP command, e.g. `scp -P 2222 -i ~/key`.                                                         |
 | `LOGBENCH_KEEP_REMOTE` | `0`                     | Set to `1` to leave the staged binary/results on the device.                                      |
