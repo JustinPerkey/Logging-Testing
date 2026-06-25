@@ -1,0 +1,20 @@
+{
+  "host": "vm",
+  "kernel": "Linux 6.18.5",
+  "cpu_model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+  "cpu_count": "4",
+  "memory": "15.7 GiB",
+  "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+  "git_commit": "4189b2a",
+  "started": "2026-06-25T19:35:38Z",
+  "finished": "2026-06-25T19:37:19Z",
+  "trials_requested": "12",
+  "messages": "20000",
+  "warmup": "2000",
+  "writer_buf": "65536",
+  "full_policy": "block",
+  "msg_sizes": "64,1024",
+  "producers": "1,4",
+  "rates": "0",
+  "buffers": "8192"
+}

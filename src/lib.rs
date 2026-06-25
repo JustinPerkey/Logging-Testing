@@ -1,15 +1,19 @@
 //! # logbench
 //!
-//! A small, self-contained benchmark engine for comparing **asynchronous,
-//! non-blocking logging strategies** in Rust.
+//! A small, self-contained benchmark engine for comparing **real Rust logging
+//! crates** — `env_logger`, `fern`, `log4rs`, `flexi_logger`, `slog`, the
+//! `tracing` instrumentation stack and `ftlog` — alongside raw **async
+//! transport baselines** (direct, crossbeam, flume, tracing-appender).
 //!
 //! The central question this crate answers is: *given my hardware, my message
-//! sizes, my buffer budget and my log rate, which logging strategy keeps the
-//! hot path fastest while still durably writing every record?*
+//! sizes, my buffer budget and my log rate, which logging crate keeps the hot
+//! path fastest while still durably writing every record?* For the real crates
+//! the measurement includes their genuine per-record cost (timestamp, level
+//! filtering, formatting, sink hand-off) — the actual crate difference.
 //!
 //! To answer that it sweeps a matrix of:
-//! * **strategies** ([`loggers`]) — direct/blocking, crossbeam-channel,
-//!   flume-channel and the `tracing-appender` non-blocking writer;
+//! * **strategies** ([`loggers`]) — the transport baselines plus the real
+//!   logging crates listed above (see [`config::Strategy`]);
 //! * **message sizes** — bytes per log record;
 //! * **buffer amounts** — channel capacity / writer buffer size;
 //! * **log frequency** — either max throughput, or a pinned target rate;

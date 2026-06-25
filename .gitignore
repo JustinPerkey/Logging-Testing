@@ -23,3 +23,8 @@ target
 # logbench output
 bench-out/
 *.log
+
+# overnight harness run directories (bulky per-trial JSON/CSV). The curated
+# sample report lives in sample-report/ and is committed.
+overnight-out/
+smoke-out/

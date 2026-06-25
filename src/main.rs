@@ -14,8 +14,15 @@ use logbench::runner::run_case;
 #[derive(Parser, Debug)]
 #[command(name = "logbench", version, about, long_about = None)]
 struct Cli {
-    /// Strategies to test (comma-separated), or "all".
-    /// Options: direct, crossbeam, flume, tracing-appender.
+    /// Strategies to test (comma-separated), or a shortcut: "all" (the four
+    /// transport baselines), "crates" (every real logging crate), or "every"
+    /// (both). Individual names: direct, crossbeam, flume, tracing-appender,
+    /// env_logger, fern, log4rs, flexi_logger, slog-async, tracing-fmt,
+    /// tracing-nb, tracing-span, ftlog.
+    ///
+    /// NOTE: each real crate installs a process-global logger, so only one
+    /// global crate may be named per process — use `scripts/overnight.sh` to
+    /// sweep them all (it runs each in its own process).
     #[arg(long, default_value = "all", value_delimiter = ',')]
     strategies: Vec<String>,
 
@@ -70,8 +77,14 @@ struct Cli {
 }
 
 fn parse_strategies(raw: &[String]) -> Result<Vec<Strategy>, String> {
-    if raw.iter().any(|s| s.trim().eq_ignore_ascii_case("all")) {
-        return Ok(Strategy::ALL.to_vec());
+    // Shortcut keywords expand to a fixed set.
+    for s in raw {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "all" => return Ok(Strategy::ALL.to_vec()),
+            "crates" => return Ok(Strategy::CRATES.to_vec()),
+            "every" | "everything" => return Ok(Strategy::EVERY.to_vec()),
+            _ => {}
+        }
     }
     raw.iter().map(|s| s.parse::<Strategy>()).collect()
 }
@@ -161,7 +174,20 @@ fn main() -> std::io::Result<()> {
                         use std::io::Write as _;
                         std::io::stdout().flush().ok();
 
-                        let result = run_case(strategy, &cfg, workload)?;
+                        let result = match run_case(strategy, &cfg, workload) {
+                            Ok(r) => r,
+                            // A second, different global logger in one process
+                            // can't be installed; skip it (the overnight harness
+                            // runs each global crate in its own process).
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                println!("skipped ({e})");
+                                if !cli.keep_logs {
+                                    let _ = std::fs::remove_file(&log_path);
+                                }
+                                continue;
+                            }
+                            Err(e) => return Err(e),
+                        };
                         println!(
                             "p99={} thrpt={} drop={}",
                             logbench::metrics::fmt_ns(result.latency.p99_ns as f64),

@@ -1,15 +1,20 @@
-# logbench — find your optimal async logging strategy
+# logbench — compare Rust logging crates (and async transports) on your machine
 
-`logbench` is a self-contained Rust suite for benchmarking **asynchronous,
-non-blocking logging** strategies. Clone it, run it on *your* machine, and it
-will tell you which logging approach keeps your hot path fastest while still
-durably writing every record — for *your* message sizes, buffer budget, log
-rate and thread count.
+`logbench` is a self-contained Rust suite for benchmarking **popular logging
+crates** head-to-head — `env_logger`, `fern`, `log4rs`, `flexi_logger`, `slog`,
+the `tracing` instrumentation stack and the high-throughput `ftlog` — alongside
+a set of raw **async transport baselines** (`direct`, `crossbeam`, `flume`,
+`tracing-appender`). Clone it, run it on *your* machine, and it will tell you
+which logging crate keeps your hot path fastest while still durably writing
+every record — for *your* message sizes, buffer budget, log rate and thread
+count.
 
-The thing it actually measures is the one that matters for non-blocking
-logging: **how long the `log()` call blocks the producing thread** (the
-hot-path latency distribution), alongside throughput, drain cost and dropped
-records.
+The thing it actually measures is the one that matters most: **how long the
+`log()` call holds the producing thread** (the hot-path latency distribution),
+alongside throughput, drain cost and dropped records. For the real crates that
+includes their genuine per-record cost — timestamp formatting, level filtering,
+field encoding and the hand-off to their sink — which is exactly the *crate
+difference* this suite exists to surface.
 
 ## Quick start
 
@@ -17,33 +22,68 @@ records.
 # Build optimized (always benchmark in release).
 cargo build --release
 
-# Run the default sweep and print a table + recommendation.
+# Compare the async transport baselines (the default):
 ./target/release/logbench
 
-# Or in one step:
-cargo run --release
+# Compare a couple of real crates directly (one global crate per process —
+# see the note below):
+./target/release/logbench --strategies tracing-fmt
+./target/release/logbench --strategies slog-async,crossbeam
+
+# Run the full, statistically-significant comparison of EVERY crate overnight:
+scripts/overnight.sh            # writes overnight-out/REPORT.md
 ```
 
 You'll get a per-case progress line, a results table, a plain-language
 recommendation, and `bench-out/results.csv` + `bench-out/results.json` for
-further analysis.
+further analysis. The overnight harness additionally produces a full Markdown
+**report** with means and 95% confidence intervals — see
+[Overnight comparison & report](#overnight-comparison--report).
 
-## Strategies compared
+## What's compared
 
-Every strategy ultimately writes records to a file behind a `BufWriter`. What
-differs is how the producing thread hands a record off — which is exactly what
-drives hot-path latency and the non-blocking property.
+### Real logging crates (the headline comparison)
+
+These drive an actual crate through its real macro → format → sink path, so the
+measured latency includes everything the crate does per record.
+
+| Strategy        | Crate                            | Kind                         | Global? |
+| --------------- | -------------------------------- | ---------------------------- | ------- |
+| `env_logger`    | `log` + `env_logger`             | Simple `log`-facade backend  | Yes     |
+| `fern`          | `log` + `fern`                   | `log`-facade dispatch        | Yes     |
+| `log4rs`        | `log` + `log4rs`                 | `log`-facade, appender-based | Yes     |
+| `flexi_logger`  | `flexi_logger` (async mode)      | `log`-facade, async writer   | Yes     |
+| `slog-async`    | `slog` + `slog-async`            | Structured logging           | No      |
+| `tracing-fmt`   | `tracing` + `tracing-subscriber` | Instrumentation (sync fmt)   | Yes     |
+| `tracing-nb`    | `tracing` + `tracing-appender`   | Instrumentation (async)      | Yes     |
+| `tracing-span`  | `tracing` (span-wrapped events)  | Instrumentation (+ spans)    | Yes     |
+| `ftlog`         | `ftlog`                          | High-throughput async        | Yes     |
+
+### Transport baselines (raw bytes, no formatting)
+
+These write the raw payload to a file behind different hand-off mechanisms, with
+**no formatting cost**. They isolate the cost of the transport itself, and give
+the real crates an honest reference point.
 
 | Strategy           | How it works                                                                 | Non-blocking? |
 | ------------------ | ---------------------------------------------------------------------------- | ------------- |
 | `direct`           | `Mutex<BufWriter<File>>` written on the calling thread. The honest baseline. | No            |
 | `crossbeam`        | `crossbeam-channel` → single background writer thread.                       | Yes           |
 | `flume`            | `flume` channel → single background writer thread.                           | Yes           |
-| `tracing-appender` | The `tracing-appender` `NonBlocking` writer (what `tracing` uses for files). | Yes           |
+| `tracing-appender` | The `tracing-appender` `NonBlocking` writer (the queue, without formatting). | Yes           |
 
-The three async strategies move the file I/O off the hot path: the producer
-only allocates the record and pushes it onto a queue, while a background thread
-owns the disk writes.
+Shortcuts for `--strategies`: `all` (the four transport baselines, the default),
+`crates` (all nine real crates), `every` (both).
+
+> **One global logger per process.** The `log` facade and `tracing`'s global
+> default subscriber can each be installed only **once per process**, so the
+> crates marked *Global* above cannot be swept together in a single run — only
+> the first one installs; the rest are skipped with a clear message. This is not
+> a limitation of the benchmark but of the ecosystem. The
+> [overnight harness](#overnight-comparison--report) sidesteps it by running
+> **each strategy in its own process**, which is also better for statistical
+> isolation. `slog` is the one real crate that is *not* global — a
+> `slog::Logger` is an ordinary value.
 
 ## What gets swept
 
@@ -102,6 +142,50 @@ cargo run --release -- --full-policy drop --buffers 1024 --producers 8
 
 # Keep the produced log files for inspection.
 cargo run --release -- --keep-logs --out-dir ./my-run
+```
+
+## Overnight comparison & report
+
+A single `logbench` run measures each case once. For a decision you can trust —
+one that separates real crate differences from run-to-run noise — use the
+overnight harness, which adds **statistical significance** by running many
+independent trials and reporting confidence intervals.
+
+```bash
+scripts/overnight.sh                       # overnight-sized defaults (~hours)
+SMOKE=1 scripts/overnight.sh               # ~1 minute, validates the pipeline
+TRIALS=60 MESSAGES=1000000 scripts/overnight.sh
+```
+
+What it does:
+
+- Runs **each strategy in its own process** (so every global crate is happy),
+  repeated for many **trials** (default 40). The strategy order is reshuffled
+  every trial so thermal drift or a transient background load can't
+  systematically favour whichever ran first.
+- Writes one JSON file per trial under `overnight-out/results/<strategy>/`, plus
+  a captured `run_meta.json` (host, CPU, kernel, rustc, git commit, parameters).
+- Aggregates everything with `scripts/aggregate.py`, which treats **each trial as
+  one observation** and reports, per metric, the **mean ± 95% confidence
+  interval** (Student's t). When two strategies' intervals overlap, the report
+  says so explicitly — they are *not statistically distinguishable* on your
+  machine.
+- Produces **`overnight-out/REPORT.md`** (leaderboards per workload, best-in-each
+  crate-family, significance notes, caveats) and **`summary_stats.csv`** (mean /
+  CI / stdev / CV / min / median / max for every cell).
+
+It is safe to `Ctrl-C`: it aggregates whatever trials finished. A `MAX_HOURS`
+budget (default 10) stops launching new trials so it always lands a report by
+morning. Everything is tunable via environment variables documented at the top
+of the script (`TRIALS`, `MESSAGES`, `MSG_SIZES`, `PRODUCERS`, `STRATEGIES`, …).
+
+See [`sample-report/REPORT.md`](sample-report/REPORT.md) for an illustrative
+(short, noisy CI-VM) example of the output.
+
+You can also re-aggregate an existing run directory at any time:
+
+```bash
+python3 scripts/aggregate.py overnight-out
 ```
 
 ## Criterion micro-benchmarks (optional)
@@ -169,14 +253,23 @@ src/
   loggers/
     direct.rs        Mutex<BufWriter> baseline
     channel.rs       crossbeam + flume background-writer strategies
-    tracing_nb.rs    tracing-appender NonBlocking writer
+    tracing_nb.rs    tracing-appender NonBlocking writer (no formatting)
+    log_facade.rs    env_logger / fern / log4rs / flexi_logger (the `log` facade)
+    slog_logger.rs   slog + slog-async (structured, non-global)
+    tracing_full.rs  tracing fmt / non-blocking / span variants (instrumentation)
+    ftlog_logger.rs  ftlog high-throughput async
+scripts/
+  overnight.sh     statistically-significant overnight harness (one process/strategy)
+  aggregate.py     trial aggregation → REPORT.md + summary_stats.csv (stdlib only)
 benches/logging.rs Criterion harness
 tests/integration.rs end-to-end correctness checks
 ```
 
 Adding your own strategy is a matter of implementing the small `Logger` trait
 (`log` + `finish`) in `src/loggers/` and wiring it into `Strategy` and
-`loggers::build`.
+`loggers::build`. Real-crate backends use `record_str()` to turn the payload
+into the message string they log; global crates install behind `claim_global()`
+so only one is ever active per process.
 
 ## License
 
