@@ -135,10 +135,7 @@ pub fn print_table(results: &[CaseResult]) {
 
 /// Key grouping comparable cases: same message size, capacity, producers and rate.
 fn group_key(r: &CaseResult) -> (usize, usize, usize, u64) {
-    let rate_bits = r
-        .target_rate_per_producer
-        .map(|v| v.to_bits())
-        .unwrap_or(0);
+    let rate_bits = r.target_rate_per_producer.map(|v| v.to_bits()).unwrap_or(0);
     (r.msg_size, r.capacity, r.producers, rate_bits)
 }
 
@@ -203,7 +200,9 @@ pub fn print_recommendations(results: &[CaseResult]) {
                 r.strategy.name(),
                 fmt_ns(r.latency.p99_ns as f64)
             ),
-            None => println!("    lowest tail latency (lossless): (every strategy dropped records)"),
+            None => {
+                println!("    lowest tail latency (lossless): (every strategy dropped records)")
+            }
         }
         println!(
             "    highest throughput:             {:<16} {}{}",

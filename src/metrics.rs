@@ -38,8 +38,7 @@ impl LatencyStats {
 /// We track 1 ns .. 60 s with 3 significant figures — plenty of resolution for
 /// log-call latencies while keeping the histograms small enough to merge cheaply.
 pub fn new_latency_hist() -> Histogram<u64> {
-    Histogram::<u64>::new_with_bounds(1, 60_000_000_000, 3)
-        .expect("valid histogram bounds")
+    Histogram::<u64>::new_with_bounds(1, 60_000_000_000, 3).expect("valid histogram bounds")
 }
 
 /// Everything we learned from running one cell of the sweep matrix.
