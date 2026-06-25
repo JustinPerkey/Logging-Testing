@@ -114,6 +114,14 @@ so ordinary same-machine builds are unaffected. Other knobs: `LOGBENCH_REMOTE_DI
 LOGBENCH_REMOTE=pi@host.local cargo test --release --target aarch64-unknown-linux-gnu
 ```
 
+The `LOGBENCH_REMOTE` target runner only applies to `cargo test`/`cargo run`.
+`scripts/overnight.sh` runs the binary directly (and aggregates with Python), so
+to run the overnight comparison on another device you run the script *on* that
+device — either build there (needs `cargo` + `python3`), or cross-compile on a
+host and run with `SKIP_BUILD=1 LOGBENCH_BIN=<prebuilt>` on a device that only
+has `python3`. See the README's "Running the overnight comparison on another
+device".
+
 ## Testing notes
 
 `tests/integration.rs` is end-to-end: it verifies lossless (`block`) strategies

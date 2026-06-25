@@ -23,6 +23,30 @@
 #
 # Everything is configurable via environment variables (see DEFAULTS below).
 # The run is safe to Ctrl-C: it aggregates whatever trials completed so far.
+#
+# Running on another device. The harness benchmarks whatever machine *executes
+# this script*, and it runs the binary directly (it does not go through the
+# Cargo target runner used by `cargo test`/`cargo run`). So to benchmark a
+# different device, run this script ON that device. Two ways:
+#
+#   1. Toolchain on the device: clone the repo there and just run the script.
+#      It needs `cargo` (to build) and `python3` (to aggregate).
+#
+#   2. No Rust toolchain on the device: cross-compile the binary on a build
+#      host, copy the repo + the prebuilt binary onto the device, and run with
+#      the build skipped (the device still needs `python3`):
+#
+#        # on the build host:
+#        cargo build --release --target aarch64-unknown-linux-gnu
+#        scp target/aarch64-unknown-linux-gnu/release/logbench \
+#            user@device:/path/to/logbench/   # any path you like
+#        # on the device, from the repo root:
+#        SKIP_BUILD=1 LOGBENCH_BIN=./logbench scripts/overnight.sh
+#
+#   LOGBENCH_BIN   path to the logbench binary to run. Default: the in-tree
+#                  target/release/logbench.
+#   SKIP_BUILD     set to 1 to skip `cargo build` and use LOGBENCH_BIN as-is
+#                  (for devices without a Rust toolchain).
 
 set -uo pipefail
 
@@ -61,7 +85,9 @@ fi
 OUT_DIR="${OUT_DIR:-overnight-out}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/target/release/logbench"
+# Default to the in-tree release binary, but allow pointing at a prebuilt one
+# (e.g. a binary cross-compiled on another host and copied onto this device).
+BIN="${LOGBENCH_BIN:-$ROOT/target/release/logbench}"
 RESULTS_DIR="$OUT_DIR/results"
 LOGS_DIR="$OUT_DIR/logs"        # transient log files the strategies produce
 RUN_LOG="$OUT_DIR/overnight.log"
@@ -71,12 +97,22 @@ mkdir -p "$RESULTS_DIR" "$LOGS_DIR"
 log() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$RUN_LOG"; }
 
 # --------------------------------------------------------------------------
-# Build (always release — benchmarking a debug build is meaningless).
+# Build (always release — benchmarking a debug build is meaningless). Skipped
+# with SKIP_BUILD=1, which lets a device without a Rust toolchain run a binary
+# that was cross-compiled elsewhere and copied over (see LOGBENCH_BIN above).
 # --------------------------------------------------------------------------
-log "Building release binary..."
-if ! (cd "$ROOT" && cargo build --release >>"$RUN_LOG" 2>&1); then
-    log "ERROR: cargo build failed; see $RUN_LOG"
-    exit 1
+if [[ "${SKIP_BUILD:-0}" == "1" ]]; then
+    if [[ ! -x "$BIN" ]]; then
+        log "ERROR: SKIP_BUILD=1 but no executable binary at '$BIN' (set LOGBENCH_BIN)."
+        exit 1
+    fi
+    log "Skipping build (SKIP_BUILD=1); using prebuilt binary: $BIN"
+else
+    log "Building release binary..."
+    if ! (cd "$ROOT" && cargo build --release >>"$RUN_LOG" 2>&1); then
+        log "ERROR: cargo build failed; see $RUN_LOG"
+        exit 1
+    fi
 fi
 
 IFS=',' read -r -a STRAT_ARR <<<"$STRATEGIES"

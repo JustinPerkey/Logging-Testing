@@ -188,6 +188,54 @@ You can also re-aggregate an existing run directory at any time:
 python3 scripts/aggregate.py overnight-out
 ```
 
+### Running the overnight comparison on another device
+
+Like the benchmark itself, the overnight harness measures whatever machine
+*executes the script*. Unlike `cargo test` / `cargo run` (which can hand the
+binary to the [Cargo target runner](#running-the-tests-on-a-different-device-than-the-one-that-builds-them)),
+`scripts/overnight.sh` runs the binary **directly** — it loops over strategies
+and trials and also aggregates the results with Python. So to benchmark a
+different device, run the script *on that device*. There are two ways:
+
+**1. The device has a Rust toolchain.** Clone the repo on the device and run the
+script there. It needs `cargo` (to build the release binary) and `python3` (to
+aggregate). Nothing else to configure:
+
+```bash
+# on the device under test:
+git clone <repo-url> && cd logbench
+scripts/overnight.sh                       # or SMOKE=1 to validate first
+```
+
+**2. The device has no Rust toolchain.** Cross-compile the binary on a build
+host, copy the repo plus the prebuilt binary onto the device, and run with the
+build skipped. The device only needs `python3` (stdlib only — `aggregate.py`
+has no third-party dependencies):
+
+```bash
+# on the build host — cross-compile for the device's architecture:
+cargo build --release --target aarch64-unknown-linux-gnu
+scp -r . user@device.local:logbench/       # the repo (scripts/aggregate.py)
+scp target/aarch64-unknown-linux-gnu/release/logbench user@device.local:logbench/
+
+# on the device, from the repo root:
+SKIP_BUILD=1 LOGBENCH_BIN=./logbench scripts/overnight.sh
+```
+
+| Variable      | Default                  | Meaning                                                                 |
+| ------------- | ------------------------ | ----------------------------------------------------------------------- |
+| `SKIP_BUILD`  | `0`                      | Set to `1` to skip `cargo build` and use the prebuilt `LOGBENCH_BIN` (for devices without a Rust toolchain). |
+| `LOGBENCH_BIN`| `target/release/logbench`| Path to the logbench binary to run. Point it at a binary you copied onto the device. |
+
+The resulting `REPORT.md`, `summary_stats.csv` and `run_meta.json` are written
+on the device (the captured host/CPU/kernel metadata will be the *device's*, as
+intended) — copy them back to wherever you want to read them.
+
+> The SSH-based `LOGBENCH_REMOTE` runner documented under
+> [Running the tests on a different device](#running-the-tests-on-a-different-device-than-the-one-that-builds-them)
+> applies to `cargo test` / `cargo run` only; the overnight harness does not use
+> it. Run `scripts/overnight.sh` on the device directly as shown above.
+
 ## Criterion micro-benchmarks (optional)
 
 A complementary, statistically rigorous look at the single-call cost of each
