@@ -114,6 +114,22 @@ so ordinary same-machine builds are unaffected. Other knobs: `LOGBENCH_REMOTE_DI
 LOGBENCH_REMOTE=pi@host.local cargo test --release --target aarch64-unknown-linux-gnu
 ```
 
+`scripts/overnight.sh` has its **own** remote orchestration (it does not use the
+Cargo target runner above). Setting `LOGBENCH_REMOTE=user@host` makes the script
+build the binary on the build host, SCP it to the device, run every trial there
+over SSH, copy each trial's JSON/CSV back, and aggregate the report locally —
+fully automated, device needs only an SSH server. `LOGBENCH_TARGET=<triple>`
+cross-compiles for a different-architecture device (the script runs `--help` on
+the staged binary first and aborts with a clear message on an arch mismatch).
+The captured `run_meta.json` describes the *device* (CPU/kernel/memory) plus the
+`build_host`. It shares the `LOGBENCH_REMOTE_DIR`/`LOGBENCH_SSH`/`LOGBENCH_SCP`/
+`LOGBENCH_KEEP_REMOTE` knobs with the test runner. The binary is staged in, and
+run from, a `bin/` subdir of the staging dir, which defaults to the device's
+`$HOME` (resolved over SSH) rather than `/tmp` — `/tmp` is commonly `noexec`,
+which would refuse the copied binary. `SKIP_BUILD=1` +
+`LOGBENCH_BIN=<path>` reuse a prebuilt binary instead of building. See the
+README's "Running the overnight comparison on another device".
+
 ## Testing notes
 
 `tests/integration.rs` is end-to-end: it verifies lossless (`block`) strategies

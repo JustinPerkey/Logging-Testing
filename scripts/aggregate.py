@@ -282,9 +282,10 @@ def report(run_dir, agg, meta, files):
     if meta:
         env_rows = []
         for k in ("host", "kernel", "cpu_model", "cpu_count", "memory",
-                  "rustc", "git_commit", "started", "finished",
-                  "trials_requested", "messages", "warmup", "writer_buf",
-                  "full_policy", "msg_sizes", "producers", "rates", "buffers"):
+                  "rustc", "build_host", "remote", "git_commit", "started",
+                  "finished", "trials_requested", "messages", "warmup",
+                  "writer_buf", "full_policy", "msg_sizes", "producers",
+                  "rates", "buffers"):
             if k in meta and meta[k] not in (None, ""):
                 env_rows.append((f"`{k}`", meta[k]))
         A(md_table(["field", "value"], env_rows))

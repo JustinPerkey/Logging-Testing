@@ -188,6 +188,63 @@ You can also re-aggregate an existing run directory at any time:
 python3 scripts/aggregate.py overnight-out
 ```
 
+### Running the overnight comparison on another device
+
+You usually want the numbers for a *specific* device (a slower laptop, a server,
+an SBC like a Raspberry Pi) but don't want to install a toolchain there or babysit
+the run. Point **`LOGBENCH_REMOTE`** at the device over SSH and
+`scripts/overnight.sh` does the entire round-trip for you — no manual steps:
+
+1. **builds** the binary on this (build) host,
+2. **copies** it to the device and `chmod +x`'s it,
+3. runs **every trial on the device** over SSH,
+4. **copies each trial's results back** to this host as they complete,
+5. **aggregates the report here** — `REPORT.md`, `summary_stats.csv`, `run_meta.json`.
+
+```bash
+# Same architecture as this host (e.g. another x86-64 box) — nothing else needed:
+LOGBENCH_REMOTE=user@device.local scripts/overnight.sh
+
+# Different architecture — cross-compile for the device (install the Rust target
+# + a cross-linker on this host first, e.g. `rustup target add <triple>`):
+LOGBENCH_REMOTE=pi@raspberrypi.local LOGBENCH_TARGET=aarch64-unknown-linux-gnu \
+  scripts/overnight.sh
+
+# Validate the whole remote pipeline in ~1 minute before committing to a night:
+SMOKE=1 LOGBENCH_REMOTE=user@device.local scripts/overnight.sh
+```
+
+The **device needs nothing but an SSH server** and the ability to run the binary
+— no Rust, no Python, no repo checkout. Before launching trials the script copies
+the binary over and runs `--help` on it; if that fails (almost always an
+architecture mismatch) it stops immediately with a message telling you to set
+`LOGBENCH_TARGET`, so you never waste a night on a binary the device can't run.
+The captured `run_meta.json` records the **device's** CPU / kernel / memory (that
+is what was benchmarked) and notes this host as the `build_host`. Staged files
+are removed from the device on exit (keep them with `LOGBENCH_KEEP_REMOTE=1`).
+
+| Variable               | Default                 | Meaning                                                                                          |
+| ---------------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
+| `LOGBENCH_REMOTE`      | *(unset)*               | `user@host` of the device. **Unset → ordinary local run.**                                       |
+| `LOGBENCH_TARGET`      | *(unset)*               | Rust target triple to cross-compile for (e.g. `aarch64-unknown-linux-gnu`). Unset → build for this host's architecture. |
+| `LOGBENCH_REMOTE_DIR`  | `~/logbench-overnight` (device home) | Staging directory on the device. The executable is placed in, and runs from, its `bin/` subdirectory. Defaults under the device's `$HOME` rather than `/tmp` — `/tmp` is often mounted `noexec`, which would refuse to run the copied binary. |
+| `LOGBENCH_SSH`         | `ssh`                   | SSH command, e.g. `ssh -p 2222 -i ~/key`.                                                         |
+| `LOGBENCH_SCP`         | `scp`                   | SCP command, e.g. `scp -P 2222 -i ~/key`.                                                         |
+| `LOGBENCH_KEEP_REMOTE` | `0`                     | Set to `1` to leave the staged binary/results on the device.                                      |
+
+All the usual knobs (`TRIALS`, `MESSAGES`, `MSG_SIZES`, `PRODUCERS`,
+`STRATEGIES`, `MAX_HOURS`, …) work unchanged in remote mode.
+
+> **Without `LOGBENCH_REMOTE`** the harness simply benchmarks whatever machine
+> runs the script. If you'd rather drive it *on* the device by hand, you can also
+> skip the build and point it at a binary you copied over yourself —
+> `SKIP_BUILD=1 LOGBENCH_BIN=./logbench scripts/overnight.sh` (the device then
+> needs `python3` for aggregation, but `aggregate.py` is standard-library only).
+> This is the same `LOGBENCH_*` family used by the test runner under
+> [Running the tests on a different device](#running-the-tests-on-a-different-device-than-the-one-that-builds-them);
+> note the overnight harness drives SSH itself rather than going through the
+> Cargo target runner.
+
 ## Criterion micro-benchmarks (optional)
 
 A complementary, statistically rigorous look at the single-call cost of each
