@@ -20,6 +20,10 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Python bytecode cache (scripts/aggregate.py)
+__pycache__/
+*.pyc
+
 # logbench output
 bench-out/
 *.log
