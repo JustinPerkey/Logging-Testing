@@ -60,6 +60,46 @@ fi
 # Default output directory for the normal (non-smoke) run.
 OUT_DIR="${OUT_DIR:-overnight-out}"
 
+# --------------------------------------------------------------------------
+# Embedded / core-limited safety: never let a single benchmark case spawn more
+# concurrent producer threads than the machine has cores.
+#
+# Each case runs `producers` threads that emit simultaneously (see
+# runner::run_case). On a beefy multi-core box, sweeping producers=1,4,8 measures
+# real lock/queue contention. On a core-limited embedded device the same 8-way
+# case oversubscribes the cores: the producers spend their time fighting the OS
+# scheduler instead of the logger, which distorts the hot-path latency we care
+# about and can wedge a tiny board. So clamp the producer sweep to the available
+# core count — on a single-core device this collapses to producers=1 (fully
+# serial), exactly what you want when running on constrained hardware.
+#
+# Override the ceiling with MAX_PRODUCERS (set it high, e.g. 9999, to opt out).
+# --------------------------------------------------------------------------
+NPROC="$(nproc 2>/dev/null || echo 1)"
+MAX_PRODUCERS="${MAX_PRODUCERS:-$NPROC}"
+
+clamp_producers() {
+    local kept=() p
+    IFS=',' read -r -a _producers <<<"$PRODUCERS"
+    for p in "${_producers[@]}"; do
+        if (( p <= MAX_PRODUCERS )); then
+            kept+=("$p")
+        fi
+    done
+    # Always keep at least one case; if everything exceeded the ceiling, fall
+    # back to a single case capped at the ceiling itself.
+    if (( ${#kept[@]} == 0 )); then
+        kept=("$MAX_PRODUCERS")
+    fi
+    local clamped
+    clamped="$(IFS=,; echo "${kept[*]}")"
+    if [[ "$clamped" != "$PRODUCERS" ]]; then
+        PRODUCERS_CLAMP_NOTE="producers clamped from [$PRODUCERS] to [$clamped] (cores=$NPROC, MAX_PRODUCERS=$MAX_PRODUCERS)"
+    fi
+    PRODUCERS="$clamped"
+}
+clamp_producers
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/target/release/logbench"
 RESULTS_DIR="$OUT_DIR/results"
@@ -82,6 +122,7 @@ fi
 IFS=',' read -r -a STRAT_ARR <<<"$STRATEGIES"
 log "Strategies (${#STRAT_ARR[@]}): $STRATEGIES"
 log "Trials=$TRIALS messages=$MESSAGES warmup=$WARMUP sizes=$MSG_SIZES producers=$PRODUCERS"
+[[ -n "${PRODUCERS_CLAMP_NOTE:-}" ]] && log "$PRODUCERS_CLAMP_NOTE"
 log "Output: $OUT_DIR  (max ${MAX_HOURS}h)"
 
 # --------------------------------------------------------------------------
