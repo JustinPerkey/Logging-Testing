@@ -21,8 +21,9 @@ fn bench_log_call(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(size as u64));
 
         for &strategy in &Strategy::ALL {
+            let path = dir.path().join(format!("{}_{}.log", strategy.name(), size));
             let cfg = LoggerConfig {
-                path: dir.path().join(format!("{}_{}.log", strategy.name(), size)),
+                path: path.clone(),
                 capacity: 8192,
                 writer_buf_bytes: 64 * 1024,
                 full_policy: FullPolicy::Block,
@@ -40,6 +41,10 @@ fn bench_log_call(c: &mut Criterion) {
 
             // Drain so the background thread is cleanly shut down between cases.
             logger.finish();
+            // Criterion runs the closure millions of times, so each strategy's
+            // file can grow large. Reclaim it now (the logger is drained and
+            // dropped) rather than letting every case pile up in the tempdir.
+            let _ = std::fs::remove_file(&path);
         }
     }
     group.finish();
