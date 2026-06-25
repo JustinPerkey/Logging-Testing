@@ -44,7 +44,10 @@ pub enum Strategy {
     LogFern,
     /// The `log` facade with the `log4rs` file appender.
     LogLog4rs,
-    /// The `flexi_logger` crate in its asynchronous file write mode.
+    /// The `flexi_logger` crate writing to a file in buffered mode
+    /// (`BufferAndFlush`). Its `WriteMode::Async` uses an unbounded queue with no
+    /// back-pressure, so a buffered writer on the producing thread is used here to
+    /// bound memory like the other strategies (see `loggers::log_facade`).
     LogFlexi,
 
     // --- instrumentation / structured / high-throughput crates ---
@@ -161,7 +164,6 @@ impl Strategy {
             Strategy::Crossbeam
                 | Strategy::Flume
                 | Strategy::TracingAppender
-                | Strategy::LogFlexi
                 | Strategy::SlogAsync
                 | Strategy::TracingNonBlocking
                 | Strategy::Ftlog
