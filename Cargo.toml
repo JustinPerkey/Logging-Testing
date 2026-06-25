@@ -1,0 +1,39 @@
+[package]
+name = "logbench"
+version = "0.1.0"
+edition = "2021"
+description = "An async, non-blocking logging benchmark suite to find the optimal logging strategy on your machine."
+license = "MIT"
+readme = "README.md"
+
+# A library (the reusable benchmark engine) plus a CLI binary that drives it.
+[lib]
+name = "logbench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "logbench"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+flume = "0.11"
+hdrhistogram = "7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing-appender = "0.2"
+
+[[bench]]
+name = "logging"
+harness = false
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3"
+
+# Benchmarks are pointless without optimizations; always measure in release.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
