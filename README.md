@@ -52,7 +52,7 @@ measured latency includes everything the crate does per record.
 | `env_logger`    | `log` + `env_logger`             | Simple `log`-facade backend  | Yes     |
 | `fern`          | `log` + `fern`                   | `log`-facade dispatch        | Yes     |
 | `log4rs`        | `log` + `log4rs`                 | `log`-facade, appender-based | Yes     |
-| `flexi_logger`  | `flexi_logger` (async mode)      | `log`-facade, async writer   | Yes     |
+| `flexi_logger`  | `flexi_logger` (buffered mode)   | `log`-facade, buffered writer| Yes     |
 | `slog-async`    | `slog` + `slog-async`            | Structured logging           | No      |
 | `tracing-fmt`   | `tracing` + `tracing-subscriber` | Instrumentation (sync fmt)   | Yes     |
 | `tracing-nb`    | `tracing` + `tracing-appender`   | Instrumentation (async)      | Yes     |

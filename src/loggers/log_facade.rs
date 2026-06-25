@@ -190,7 +190,7 @@ fn install_log4rs(cfg: &LoggerConfig) -> std::io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// flexi_logger (asynchronous file write mode)
+// flexi_logger (buffered file write mode)
 // ---------------------------------------------------------------------------
 
 pub fn build_flexi(cfg: &LoggerConfig) -> std::io::Result<Arc<dyn Logger>> {
@@ -203,7 +203,7 @@ pub fn build_flexi(cfg: &LoggerConfig) -> std::io::Result<Arc<dyn Logger>> {
 }
 
 fn flexi_flush() {
-    // The handle is the canonical flush path for flexi's async writer.
+    // The handle is the canonical flush path for flexi's buffered writer.
     if let Some(h) = FLEXI_HANDLE
         .lock()
         .expect("flexi handle mutex poisoned")
@@ -220,10 +220,12 @@ static FLEXI_HANDLE: Mutex<Option<flexi_logger::LoggerHandle>> = Mutex::new(None
 fn install_flexi(cfg: &LoggerConfig) -> std::io::Result<()> {
     use flexi_logger::{FileSpec, Logger as FlexiBuilder, WriteMode};
     use std::sync::Once;
+    use std::time::Duration;
 
     static INIT: Once = Once::new();
     let mut result = Ok(());
     let path = cfg.path.clone();
+    let buf_bytes = cfg.writer_buf_bytes;
     INIT.call_once(|| {
         result = (|| {
             let dir = path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -240,7 +242,20 @@ fn install_flexi(cfg: &LoggerConfig) -> std::io::Result<()> {
                         .suppress_timestamp()
                         .suffix("log"),
                 )
-                .write_mode(WriteMode::Async)
+                // flexi's `WriteMode::Async` hands records to a background thread
+                // through an *unbounded* channel, so under an unbounded firehose
+                // (rate=max) the queue grows without limit and the process is
+                // OOM-killed (rc=137). Every other strategy here bounds memory and
+                // applies back-pressure; match that by buffering on the producing
+                // thread instead. The fixed-size `BufWriter` blocks the caller on
+                // the file write once full — lossless back-pressure consistent with
+                // `full_policy=block` — using the same `writer_buf_bytes` knob as
+                // the `direct` baseline. Records are still durably flushed by
+                // `finish()` (and periodically by flexi's flush thread).
+                .write_mode(WriteMode::BufferAndFlushWith(
+                    buf_bytes,
+                    Duration::from_secs(1),
+                ))
                 .start()
                 .map_err(to_io_err)?;
             *FLEXI_HANDLE.lock().expect("flexi handle mutex poisoned") = Some(handle);
