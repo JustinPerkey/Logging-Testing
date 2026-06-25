@@ -154,7 +154,7 @@ def load(run_dir):
     meta = {}
     meta_path = os.path.join(run_dir, "run_meta.json")
     if os.path.exists(meta_path):
-        with open(meta_path) as f:
+        with open(meta_path, encoding="utf-8") as f:
             meta = json.load(f)
 
     records = []
@@ -163,7 +163,7 @@ def load(run_dir):
     for path in files:
         trial = os.path.basename(path).replace("trial_", "").replace(".json", "")
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 rows = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             print(f"warning: skipping {path}: {e}", file=sys.stderr)
@@ -521,12 +521,12 @@ def family_narrative(primary, agg):
 
 def write_files(run_dir, lines, agg, cells):
     report_path = os.path.join(run_dir, "REPORT.md")
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     print(f"wrote {report_path}")
 
     csv_path = os.path.join(run_dir, "summary_stats.csv")
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["msg_size", "capacity", "producers", "rate", "full_policy",
                     "strategy", "metric", "n_trials", "mean", "ci95_halfwidth",
