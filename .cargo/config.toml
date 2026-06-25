@@ -1,0 +1,24 @@
+# Cross-device test/run support.
+#
+# logbench measures logging behaviour on a *specific* machine, so you often want
+# to build on a beefy workstation but run the tests/benchmarks on the actual
+# device you care about. Cargo's "target runner" mechanism makes this seamless:
+# when a runner is configured, `cargo test` / `cargo run` hands the freshly built
+# binary to that runner instead of executing it directly.
+#
+# `scripts/remote-test-runner.sh` is that runner. Point the LOGBENCH_REMOTE env
+# var at a device (e.g. `user@host`) and the binary is copied there over SSH and
+# executed on the device, with arguments and exit code forwarded. When
+# LOGBENCH_REMOTE is unset the runner just execs the binary locally, so this
+# config is completely transparent for ordinary same-machine builds.
+#
+# Typical cross-device workflow:
+#
+#   LOGBENCH_REMOTE=pi@raspberrypi.local \
+#     cargo test --release --target aarch64-unknown-linux-gnu
+#
+# `cfg(all())` matches every target, so the runner applies whether you build for
+# the host or cross-compile. See scripts/remote-test-runner.sh for the full set
+# of LOGBENCH_* configuration variables.
+[target.'cfg(all())']
+runner = "scripts/remote-test-runner.sh"
