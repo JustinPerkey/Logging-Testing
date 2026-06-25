@@ -122,6 +122,42 @@ cargo test --release
 The integration tests verify that lossless (`block`) strategies durably write
 *every* record and that the `drop` policy actually sheds load under pressure.
 
+### Running the tests on a different device than the one that builds them
+
+Because `logbench` measures behaviour on a *specific* machine, you may want to
+build the tests/benchmarks on one host but run them on the actual device under
+test (a slower laptop, an SBC like a Raspberry Pi, a server, etc.). This repo
+ships a Cargo **target runner** (`scripts/remote-test-runner.sh`, wired up in
+`.cargo/config.toml`) that makes this seamless: it copies each freshly built
+binary to a target device over SSH, runs it *there*, and forwards the arguments
+and exit code back to Cargo. All the test logic — temp dirs, file writes, the
+byte-count assertions — executes on the device.
+
+```bash
+# Build on this machine, run the tests on the target device:
+LOGBENCH_REMOTE=user@device.local \
+  cargo test --release --target aarch64-unknown-linux-gnu
+
+# You can also run the benchmark binary itself on the device:
+LOGBENCH_REMOTE=user@device.local \
+  cargo run --release --target aarch64-unknown-linux-gnu -- --producers 4
+```
+
+Configure it with these environment variables:
+
+| Variable               | Default                | Meaning                                                       |
+| ---------------------- | ---------------------- | ------------------------------------------------------------ |
+| `LOGBENCH_REMOTE`      | *(unset)*              | `user@host` of the target device. **Unset → run locally** (the runner is a no-op, so normal same-machine builds are unaffected). |
+| `LOGBENCH_REMOTE_DIR`  | `/tmp/logbench-tests`  | Directory on the target to stage binaries in.                |
+| `LOGBENCH_SSH`         | `ssh`                  | SSH command, e.g. `ssh -p 2222 -i ~/key` for a custom port/key. |
+| `LOGBENCH_SCP`         | `scp`                  | SCP command, e.g. `scp -P 2222 -i ~/key`.                    |
+| `LOGBENCH_KEEP_REMOTE` | `0`                    | Set to `1` to keep the copied binary on the device after the run. |
+
+The target device only needs to be reachable over SSH and able to run the
+compiled binary — no Rust toolchain required on it. Cross-compiling for the
+device's architecture is the usual reason to set `--target`; if the build and
+target share an architecture you can omit it.
+
 ## How it's built
 
 ```
