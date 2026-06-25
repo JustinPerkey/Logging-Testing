@@ -76,6 +76,26 @@ struct Cli {
     json: Option<PathBuf>,
 }
 
+/// Reclaim the disk a finished case's log file is holding.
+///
+/// Non-global loggers are torn down by `finish()`, so their file is closed and
+/// can simply be deleted. Global loggers (the `log` facade / `tracing` default)
+/// install **once per process** and keep their file open for the whole run, so
+/// unlinking it would not free the blocks until the process exits — and every
+/// later case keeps appending to that same open file. Truncating it instead
+/// frees the space now while leaving the live writer working, which is what
+/// keeps an overnight per-strategy process from accumulating every case's bytes.
+fn reclaim_log(path: &std::path::Path, is_global: bool) {
+    if is_global {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(path);
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn parse_strategies(raw: &[String]) -> Result<Vec<Strategy>, String> {
     // Shortcut keywords expand to a fixed set.
     for s in raw {
@@ -146,14 +166,24 @@ fn main() -> std::io::Result<()> {
                             target_rate_per_producer: target_rate,
                             warmup: cli.warmup,
                         };
-                        let log_path = cli.out_dir.join(format!(
-                            "{}_s{}_c{}_p{}_r{}.log",
-                            strategy.name(),
-                            size,
-                            cap,
-                            producers,
-                            rate as u64,
-                        ));
+                        // Global loggers install once and keep their *first*
+                        // case's file open for the whole process, so every later
+                        // case writes to that same file no matter what we name
+                        // it here. Give them one stable path so the cleanup below
+                        // targets the file actually on disk; non-global
+                        // strategies get a fresh, unique file per case.
+                        let log_path = if strategy.is_global() {
+                            cli.out_dir.join(format!("{}.log", strategy.name()))
+                        } else {
+                            cli.out_dir.join(format!(
+                                "{}_s{}_c{}_p{}_r{}.log",
+                                strategy.name(),
+                                size,
+                                cap,
+                                producers,
+                                rate as u64,
+                            ))
+                        };
                         let cfg = LoggerConfig {
                             path: log_path.clone(),
                             capacity: cap,
@@ -182,7 +212,7 @@ fn main() -> std::io::Result<()> {
                             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                                 println!("skipped ({e})");
                                 if !cli.keep_logs {
-                                    let _ = std::fs::remove_file(&log_path);
+                                    reclaim_log(&log_path, strategy.is_global());
                                 }
                                 continue;
                             }
@@ -197,10 +227,21 @@ fn main() -> std::io::Result<()> {
                         results.push(result);
 
                         if !cli.keep_logs {
-                            let _ = std::fs::remove_file(&log_path);
+                            reclaim_log(&log_path, strategy.is_global());
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Global loggers were truncated (not deleted) between cases because their
+    // file stayed open; now that the sweep is done, drop the leftover entries so
+    // the output directory isn't littered with empty per-strategy log files.
+    if !cli.keep_logs {
+        for &strategy in &strategies {
+            if strategy.is_global() {
+                let _ = std::fs::remove_file(cli.out_dir.join(format!("{}.log", strategy.name())));
             }
         }
     }
