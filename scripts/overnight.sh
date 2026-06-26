@@ -74,6 +74,7 @@ MSG_SIZES="${MSG_SIZES:-64,512,4096}"        # payload sizes (bytes)
 PRODUCERS="${PRODUCERS:-1,4,8}"              # concurrent producer-thread counts
 BUFFERS="${BUFFERS:-8192}"                   # channel/queue capacity (records)
 RATES="${RATES:-0}"                          # 0 = max throughput; or rec/s per producer
+LINES_PER_LOG="${LINES_PER_LOG:-30}"         # synthetic code-lines between log() calls (0 disables slowdown model)
 WRITER_BUF="${WRITER_BUF:-65536}"            # background BufWriter size (bytes)
 FULL_POLICY="${FULL_POLICY:-block}"          # block (lossless) or drop (lossy)
 STRATEGIES="${STRATEGIES:-direct,crossbeam,flume,tracing-appender,env_logger,fern,log4rs,flexi_logger,slog-async,tracing-fmt,tracing-nb,tracing-span,ftlog}"
@@ -202,7 +203,7 @@ fi
 
 IFS=',' read -r -a STRAT_ARR <<<"$STRATEGIES"
 log "Strategies (${#STRAT_ARR[@]}): $STRATEGIES"
-log "Trials=$TRIALS messages=$MESSAGES warmup=$WARMUP sizes=$MSG_SIZES producers=$PRODUCERS"
+log "Trials=$TRIALS messages=$MESSAGES warmup=$WARMUP sizes=$MSG_SIZES producers=$PRODUCERS lines_per_log=$LINES_PER_LOG"
 log "Output: $OUT_DIR  (max ${MAX_HOURS}h)"
 
 # --------------------------------------------------------------------------
@@ -276,7 +277,8 @@ write_meta() {
   "msg_sizes": $(json_escape "$MSG_SIZES"),
   "producers": $(json_escape "$PRODUCERS"),
   "rates": $(json_escape "$RATES"),
-  "buffers": $(json_escape "$BUFFERS")
+  "buffers": $(json_escape "$BUFFERS"),
+  "lines_per_log": $(json_escape "$LINES_PER_LOG")
 }
 EOF
 }
@@ -299,6 +301,7 @@ run_case() {
         --warmup "$WARMUP"
         --writer-buf "$WRITER_BUF"
         --full-policy "$FULL_POLICY"
+        --lines-per-log "$LINES_PER_LOG"
     )
 
     if [[ -z "$REMOTE" ]]; then

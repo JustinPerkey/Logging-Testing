@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-use crate::metrics::{fmt_ns, fmt_rate, CaseResult};
+use crate::metrics::{fmt_ns, fmt_rate, fmt_slowdown, CaseResult};
 
 /// Write all results as a CSV file (one row per case).
 pub fn write_csv(results: &[CaseResult], path: &Path) -> std::io::Result<()> {
@@ -15,12 +15,14 @@ pub fn write_csv(results: &[CaseResult], path: &Path) -> std::io::Result<()> {
         "strategy,producers,messages_per_producer,total_messages,msg_size,capacity,\
 writer_buf_bytes,full_policy,target_rate_per_producer,dropped,enqueue_secs,drain_secs,\
 enqueue_throughput,end_to_end_throughput,mb_per_sec,lat_mean_ns,lat_min_ns,lat_p50_ns,\
-lat_p90_ns,lat_p99_ns,lat_p999_ns,lat_max_ns"
+lat_p90_ns,lat_p99_ns,lat_p999_ns,lat_max_ns,lines_per_log,ns_per_line,work_only_secs,\
+slowdown_pct"
     )?;
     for r in results {
         writeln!(
             f,
-            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.2},{:.2},{:.4},{:.1},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{:.2},{:.2},{:.4},{:.1},{},{},{},{},{},{},\
+{},{:.2},{:.6},{}",
             r.strategy.name(),
             r.producers,
             r.messages_per_producer,
@@ -45,6 +47,12 @@ lat_p90_ns,lat_p99_ns,lat_p999_ns,lat_max_ns"
             r.latency.p99_ns,
             r.latency.p999_ns,
             r.latency.max_ns,
+            r.lines_per_log,
+            r.ns_per_line,
+            r.work_only_secs,
+            r.slowdown_pct
+                .map(|v| format!("{v:.2}"))
+                .unwrap_or_default(),
         )?;
     }
     Ok(())
@@ -61,7 +69,7 @@ pub fn print_table(results: &[CaseResult]) {
     // Column headers and the closures that render each cell.
     let headers = [
         "strategy", "size", "cap", "prod", "rate", "p50", "p99", "p99.9", "max", "thrpt", "MB/s",
-        "drop",
+        "drop", "lines", "slowdn",
     ];
     let rows: Vec<Vec<String>> = results
         .iter()
@@ -85,6 +93,12 @@ pub fn print_table(results: &[CaseResult]) {
                 fmt_rate(r.end_to_end_throughput),
                 format!("{:.1}", r.mb_per_sec),
                 r.dropped.to_string(),
+                if r.lines_per_log == 0 {
+                    "—".to_string()
+                } else {
+                    r.lines_per_log.to_string()
+                },
+                fmt_slowdown(r.slowdown_pct),
             ]
         })
         .collect();
@@ -133,10 +147,17 @@ pub fn print_table(results: &[CaseResult]) {
     println!("{}", sep(&widths));
 }
 
-/// Key grouping comparable cases: same message size, capacity, producers and rate.
-fn group_key(r: &CaseResult) -> (usize, usize, usize, u64) {
+/// Key grouping comparable cases: same message size, capacity, producers, rate
+/// and inter-log work (so slowdown figures within a group are comparable).
+fn group_key(r: &CaseResult) -> (usize, usize, usize, u64, u64) {
     let rate_bits = r.target_rate_per_producer.map(|v| v.to_bits()).unwrap_or(0);
-    (r.msg_size, r.capacity, r.producers, rate_bits)
+    (
+        r.msg_size,
+        r.capacity,
+        r.producers,
+        rate_bits,
+        r.lines_per_log,
+    )
 }
 
 /// Print a plain-language recommendation derived from the results.
@@ -150,7 +171,7 @@ pub fn print_recommendations(results: &[CaseResult]) {
         return;
     }
 
-    let mut groups: BTreeMap<(usize, usize, usize, u64), Vec<&CaseResult>> = BTreeMap::new();
+    let mut groups: BTreeMap<(usize, usize, usize, u64, u64), Vec<&CaseResult>> = BTreeMap::new();
     for r in results {
         groups.entry(group_key(r)).or_default().push(r);
     }
@@ -173,6 +194,13 @@ pub fn print_recommendations(results: &[CaseResult]) {
             .iter()
             .filter(|r| r.dropped == 0)
             .min_by_key(|r| r.latency.p99_ns);
+        // Smallest program slowdown among lossless runs (only when the work
+        // model was enabled, so a slowdown was actually measured).
+        let best_slowdown = group
+            .iter()
+            .filter(|r| r.dropped == 0)
+            .filter_map(|r| r.slowdown_pct.map(|p| (r, p)))
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Highest end-to-end throughput overall.
         let best_thrpt = group
             .iter()
@@ -183,8 +211,13 @@ pub fn print_recommendations(results: &[CaseResult]) {
             })
             .unwrap();
 
+        let lines_note = if sample.lines_per_log == 0 {
+            String::new()
+        } else {
+            format!(", log every {} lines", sample.lines_per_log)
+        };
         println!(
-            "• {size}B, cap {cap}, {prod} producer(s), {rate} rate:",
+            "• {size}B, cap {cap}, {prod} producer(s), {rate} rate{lines}:",
             size = sample.msg_size,
             cap = if sample.capacity == 0 {
                 "∞".to_string()
@@ -193,6 +226,7 @@ pub fn print_recommendations(results: &[CaseResult]) {
             },
             prod = sample.producers,
             rate = rate,
+            lines = lines_note,
         );
         match best_latency {
             Some(r) => println!(
@@ -203,6 +237,13 @@ pub fn print_recommendations(results: &[CaseResult]) {
             None => {
                 println!("    lowest tail latency (lossless): (every strategy dropped records)")
             }
+        }
+        if let Some((r, pct)) = best_slowdown {
+            println!(
+                "    smallest program slowdown:      {:<16} {} slower",
+                r.strategy.name(),
+                fmt_slowdown(Some(pct)),
+            );
         }
         println!(
             "    highest throughput:             {:<16} {}{}",

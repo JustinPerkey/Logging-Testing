@@ -275,6 +275,17 @@ pub struct Workload {
     /// Untimed records emitted before measurement begins, to warm caches and
     /// spin up the background writer.
     pub warmup: u64,
+    /// Units of synthetic CPU work ("lines of code") executed *between*
+    /// consecutive `log()` calls, used to model logging interleaved with real
+    /// program work and quantify the resulting hot-path slowdown.
+    ///
+    /// When this is non-zero the runner measures the case twice: once running
+    /// only the work (the no-logging baseline) and once running the work *and*
+    /// the `log()` calls. The ratio of the logging-attributable time to the
+    /// baseline work time is reported as the program slowdown. `0` disables the
+    /// work model: no baseline phase runs and no slowdown is reported, so the
+    /// benchmark behaves exactly as a pure back-to-back logging measurement.
+    pub lines_per_log: u64,
 }
 
 impl Workload {

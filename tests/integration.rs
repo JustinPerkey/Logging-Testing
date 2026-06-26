@@ -16,6 +16,7 @@ fn small_workload(producers: usize, messages: u64, warmup: u64) -> Workload {
         msg_size: MSG_SIZE,
         target_rate_per_producer: None,
         warmup,
+        lines_per_log: 0,
     }
 }
 

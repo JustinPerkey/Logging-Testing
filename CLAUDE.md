@@ -10,8 +10,11 @@ stack, `ftlog`) against each other and against raw async transport baselines
 (`direct`, `crossbeam`, `flume`, `tracing-appender`). The metric that matters
 most is **how long the `log()` call holds the producing thread** — the hot-path
 latency distribution (p50/p99/p99.9/max) — alongside throughput, drain cost and
-dropped records. It is a `[lib]` (the reusable engine) plus a `[[bin]]` (the CLI
-that drives it).
+dropped records. It also turns that per-call cost into an applied figure: the
+**program slowdown** of logging interleaved with real work (`--lines-per-log N`,
+default 30), i.e. how much slower your program runs when it emits a log line
+every ~N lines of code. It is a `[lib]` (the reusable engine) plus a `[[bin]]`
+(the CLI that drives it).
 
 ## Commands
 
@@ -58,19 +61,32 @@ harness and single-process skip logic will misbehave.
 ## Architecture
 
 The engine sweeps the cartesian product of strategy × msg-size × buffer ×
-producers × rate. For each cell, `runner::run_case` spawns `producers` threads
-that each emit a fixed payload, barrier-synced so they start the measured phase
-together; it times each `log()` call into an HdrHistogram, then calls
-`Logger::finish()` to drain/flush and times that separately.
+producers × rate × lines-per-log. For each cell, `runner::run_case` spawns
+`producers` threads that each emit a fixed payload, barrier-synced so they start
+the measured phase together; it times each `log()` call into an HdrHistogram,
+then calls `Logger::finish()` to drain/flush and times that separately.
+
+When `lines_per_log > 0` the runner also measures the **program slowdown**: each
+producer first runs a no-logging baseline phase (the same calibrated synthetic
+work, `runner::do_work`, with the `log()` calls removed) and then the measured
+phase (work + `log()`), both barrier-synced and wall-clock-timed. The slowdown
+is `100 × (measured − baseline) / baseline`. `runner::calibrate_ns_per_line()`
+reports the per-line work cost once for context. `lines_per_log == 0` skips the
+baseline phase entirely and the run is a pure back-to-back logging measurement
+(historical default behaviour).
 
 Source layout (`src/`):
 
 - `config.rs` — `Strategy` (the 13 variants + `ALL`/`CRATES`/`EVERY` sets,
   `name()`, `is_global`/`is_real_crate`/`is_async`, `FromStr` aliases), `FullPolicy`
-  (`block` = lossless back-pressure / `drop` = lossy), `LoggerConfig`, `Workload`.
+  (`block` = lossless back-pressure / `drop` = lossy), `LoggerConfig`, `Workload`
+  (incl. `lines_per_log`, the inter-log synthetic-work knob).
 - `runner.rs` — the measurement loop (`run_case`, `run_producer`, payload
-  generation, absolute-timeline rate pacing).
-- `metrics.rs` — `CaseResult` and HdrHistogram aggregation; `fmt_ns`/`fmt_rate` helpers.
+  generation, absolute-timeline rate pacing, the `do_work` synthetic-work model
+  and `calibrate_ns_per_line`).
+- `metrics.rs` — `CaseResult` (incl. `slowdown_pct`/`work_only_secs`/
+  `lines_per_log`/`ns_per_line`) and HdrHistogram aggregation;
+  `fmt_ns`/`fmt_rate`/`fmt_slowdown` helpers.
 - `report.rs` — CSV / JSON / console table / plain-language recommendations.
 - `loggers/` — one module per strategy family, all behind the `Logger` trait.
 

@@ -43,6 +43,14 @@ struct Cli {
     #[arg(long, default_value = "0", value_delimiter = ',')]
     rates: Vec<f64>,
 
+    /// Synthetic "lines of code" run between consecutive log() calls
+    /// (comma-separated to sweep). Models logging interleaved with real work and
+    /// reports the resulting hot-path slowdown (% slower than the same work with
+    /// no logging). `0` disables the work model (pure back-to-back logging, no
+    /// slowdown reported). Default `30` ≈ "a log line every ~30 lines of code".
+    #[arg(long, default_value = "30", value_delimiter = ',')]
+    lines_per_log: Vec<u64>,
+
     /// Measured records emitted per producer in each case.
     #[arg(long, default_value_t = 200_000)]
     messages: u64,
@@ -129,12 +137,36 @@ fn main() -> std::io::Result<()> {
 
     std::fs::create_dir_all(&cli.out_dir)?;
 
+    // Calibrate the per-"line" work cost once if any swept value enables the
+    // work model. This is reported as context for the slowdown figure (so the
+    // reader knows how long the modelled inter-log work actually takes here).
+    let work_enabled = cli.lines_per_log.iter().any(|&l| l > 0);
+    let ns_per_line = if work_enabled {
+        let ns = logbench::runner::calibrate_ns_per_line();
+        println!(
+            "calibration: 1 synthetic line ≈ {} on this machine \
+             (so lines_per_log={:?} ≈ {})",
+            logbench::metrics::fmt_ns(ns),
+            cli.lines_per_log,
+            cli.lines_per_log
+                .iter()
+                .filter(|&&l| l > 0)
+                .map(|&l| logbench::metrics::fmt_ns(l as f64 * ns))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        ns
+    } else {
+        0.0
+    };
+
     // Build the full sweep matrix.
     let total_cases = strategies.len()
         * cli.msg_sizes.len()
         * cli.buffers.len()
         * cli.producers.len()
-        * cli.rates.len();
+        * cli.rates.len()
+        * cli.lines_per_log.len();
     println!(
         "logbench: {} case(s) — strategies={:?}, sizes={:?}B, buffers={:?}, producers={:?}, rates={:?}",
         total_cases,
@@ -145,8 +177,8 @@ fn main() -> std::io::Result<()> {
         cli.rates,
     );
     println!(
-        "  {} measured msgs/case (+{} warmup) per producer, writer_buf={}B, full_policy={}\n",
-        cli.messages, cli.warmup, cli.writer_buf, full_policy
+        "  {} measured msgs/case (+{} warmup) per producer, writer_buf={}B, full_policy={}, lines_per_log={:?}\n",
+        cli.messages, cli.warmup, cli.writer_buf, full_policy, cli.lines_per_log
     );
 
     let mut results = Vec::with_capacity(total_cases);
@@ -156,78 +188,86 @@ fn main() -> std::io::Result<()> {
         for &cap in &cli.buffers {
             for &producers in &cli.producers {
                 for &rate in &cli.rates {
-                    for &strategy in &strategies {
-                        case_no += 1;
-                        let target_rate = if rate > 0.0 { Some(rate) } else { None };
-                        let workload = Workload {
-                            producers,
-                            messages_per_producer: cli.messages,
-                            msg_size: size,
-                            target_rate_per_producer: target_rate,
-                            warmup: cli.warmup,
-                        };
-                        // Global loggers install once and keep their *first*
-                        // case's file open for the whole process, so every later
-                        // case writes to that same file no matter what we name
-                        // it here. Give them one stable path so the cleanup below
-                        // targets the file actually on disk; non-global
-                        // strategies get a fresh, unique file per case.
-                        let log_path = if strategy.is_global() {
-                            cli.out_dir.join(format!("{}.log", strategy.name()))
-                        } else {
-                            cli.out_dir.join(format!(
-                                "{}_s{}_c{}_p{}_r{}.log",
-                                strategy.name(),
-                                size,
-                                cap,
+                    for &lines_per_log in &cli.lines_per_log {
+                        for &strategy in &strategies {
+                            case_no += 1;
+                            let target_rate = if rate > 0.0 { Some(rate) } else { None };
+                            let workload = Workload {
                                 producers,
-                                rate as u64,
-                            ))
-                        };
-                        let cfg = LoggerConfig {
-                            path: log_path.clone(),
-                            capacity: cap,
-                            writer_buf_bytes: cli.writer_buf,
-                            full_policy,
-                        };
-
-                        print!(
-                            "[{case_no}/{total_cases}] {:<16} size={size:<5} cap={cap:<6} \
-                             producers={producers} rate={} ... ",
-                            strategy.name(),
-                            if rate > 0.0 {
-                                format!("{rate:.0}")
+                                messages_per_producer: cli.messages,
+                                msg_size: size,
+                                target_rate_per_producer: target_rate,
+                                warmup: cli.warmup,
+                                lines_per_log,
+                            };
+                            // Global loggers install once and keep their *first*
+                            // case's file open for the whole process, so every later
+                            // case writes to that same file no matter what we name
+                            // it here. Give them one stable path so the cleanup below
+                            // targets the file actually on disk; non-global
+                            // strategies get a fresh, unique file per case.
+                            let log_path = if strategy.is_global() {
+                                cli.out_dir.join(format!("{}.log", strategy.name()))
                             } else {
-                                "max".into()
-                            }
-                        );
-                        use std::io::Write as _;
-                        std::io::stdout().flush().ok();
+                                cli.out_dir.join(format!(
+                                    "{}_s{}_c{}_p{}_r{}_l{}.log",
+                                    strategy.name(),
+                                    size,
+                                    cap,
+                                    producers,
+                                    rate as u64,
+                                    lines_per_log,
+                                ))
+                            };
+                            let cfg = LoggerConfig {
+                                path: log_path.clone(),
+                                capacity: cap,
+                                writer_buf_bytes: cli.writer_buf,
+                                full_policy,
+                            };
 
-                        let result = match run_case(strategy, &cfg, workload) {
-                            Ok(r) => r,
-                            // A second, different global logger in one process
-                            // can't be installed; skip it (the overnight harness
-                            // runs each global crate in its own process).
-                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                                println!("skipped ({e})");
-                                if !cli.keep_logs {
-                                    reclaim_log(&log_path, strategy.is_global());
+                            print!(
+                                "[{case_no}/{total_cases}] {:<16} size={size:<5} cap={cap:<6} \
+                             producers={producers} rate={} ... ",
+                                strategy.name(),
+                                if rate > 0.0 {
+                                    format!("{rate:.0}")
+                                } else {
+                                    "max".into()
                                 }
-                                continue;
-                            }
-                            Err(e) => return Err(e),
-                        };
-                        println!(
-                            "p99={} thrpt={} drop={}",
-                            logbench::metrics::fmt_ns(result.latency.p99_ns as f64),
-                            logbench::metrics::fmt_rate(result.end_to_end_throughput),
-                            result.dropped,
-                        );
-                        results.push(result);
+                            );
+                            use std::io::Write as _;
+                            std::io::stdout().flush().ok();
 
-                        if !cli.keep_logs {
-                            reclaim_log(&log_path, strategy.is_global());
+                            let mut result = match run_case(strategy, &cfg, workload) {
+                                Ok(r) => r,
+                                // A second, different global logger in one process
+                                // can't be installed; skip it (the overnight harness
+                                // runs each global crate in its own process).
+                                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                    println!("skipped ({e})");
+                                    if !cli.keep_logs {
+                                        reclaim_log(&log_path, strategy.is_global());
+                                    }
+                                    continue;
+                                }
+                                Err(e) => return Err(e),
+                            };
+                            // Attach the calibrated per-line cost (informational
+                            // context for the slowdown figure).
+                            result.ns_per_line = ns_per_line;
+                            println!(
+                                "p99={} thrpt={} drop={} slowdown={}",
+                                logbench::metrics::fmt_ns(result.latency.p99_ns as f64),
+                                logbench::metrics::fmt_rate(result.end_to_end_throughput),
+                                result.dropped,
+                                logbench::metrics::fmt_slowdown(result.slowdown_pct),
+                            );
+                            results.push(result);
+
+                            if !cli.keep_logs {
+                                reclaim_log(&log_path, strategy.is_global());
+                            }
                         }
                     }
                 }
