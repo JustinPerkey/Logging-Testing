@@ -74,10 +74,36 @@ pub struct CaseResult {
     pub mb_per_sec: f64,
     /// Hot-path latency distribution of the `log()` call.
     pub latency: LatencyStats,
+
+    // --- interleaved-work slowdown model (see `Workload::lines_per_log`) ---
+    /// Synthetic "lines of code" run between consecutive `log()` calls. `0`
+    /// means the work model was disabled, so the slowdown fields below are not
+    /// meaningful (`slowdown_pct` is `None`).
+    pub lines_per_log: u64,
+    /// Wall-clock seconds the no-logging baseline phase took (the same work with
+    /// the `log()` calls removed). `0.0` when the work model is disabled.
+    pub work_only_secs: f64,
+    /// How much slower the program ran *because of logging*, as a percentage of
+    /// the no-logging baseline: `100 * logging_time / work_only_time`. `None`
+    /// when the work model is disabled (`lines_per_log == 0`). This is the
+    /// headline "device slowdown for logging every N lines" figure.
+    pub slowdown_pct: Option<f64>,
+    /// Calibrated cost of one synthetic work unit ("line of code") on this
+    /// machine, in nanoseconds. Informational context for `lines_per_log`
+    /// (so `lines_per_log * ns_per_line` is the modelled inter-log work time).
+    /// Filled in by the CLI after calibration; `0.0` otherwise.
+    pub ns_per_line: f64,
 }
 
 impl CaseResult {
     /// Build a result from a finished run.
+    ///
+    /// `enqueue_secs` is the *logging-attributable* wall time: when the
+    /// interleaved-work model is enabled this is the measured-phase time with
+    /// the baseline work time already subtracted out, so throughput stays an
+    /// apples-to-apples logging figure. `work_only_secs` is the baseline (no
+    /// logging) wall time, used to compute the slowdown percentage; pass `0.0`
+    /// when the work model is disabled.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         strategy: Strategy,
@@ -89,6 +115,7 @@ impl CaseResult {
         dropped: u64,
         enqueue_secs: f64,
         drain_secs: f64,
+        work_only_secs: f64,
     ) -> Self {
         let total = workload.total_messages();
         let delivered = total.saturating_sub(dropped);
@@ -109,6 +136,14 @@ impl CaseResult {
             0.0
         };
 
+        // Slowdown is only meaningful when the work model ran and produced a
+        // non-trivial baseline. `enqueue_secs` is already the logging-only time.
+        let slowdown_pct = if workload.lines_per_log > 0 && work_only_secs > 0.0 {
+            Some(100.0 * enqueue_secs / work_only_secs)
+        } else {
+            None
+        };
+
         CaseResult {
             strategy,
             producers: workload.producers,
@@ -126,7 +161,21 @@ impl CaseResult {
             end_to_end_throughput,
             mb_per_sec,
             latency: LatencyStats::from_hist(latency),
+            lines_per_log: workload.lines_per_log,
+            work_only_secs,
+            slowdown_pct,
+            // Set by the CLI after a one-time calibration; not known here.
+            ns_per_line: 0.0,
         }
+    }
+}
+
+/// Render a slowdown percentage compactly, or `—` when not measured.
+pub fn fmt_slowdown(pct: Option<f64>) -> String {
+    match pct {
+        Some(p) if p >= 100.0 => format!("{p:.0}%"),
+        Some(p) => format!("{p:.1}%"),
+        None => "—".to_string(),
     }
 }
 

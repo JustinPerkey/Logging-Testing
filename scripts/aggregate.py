@@ -118,6 +118,22 @@ def fmt_ci_rate(agg):
     return f"{fmt_rate(agg.mean)} ±{fmt_rate(agg.ci)}"
 
 
+def fmt_pct(p):
+    if p != p:  # NaN
+        return "n/a"
+    if p >= 100:
+        return f"{p:.0f}%"
+    return f"{p:.1f}%"
+
+
+def fmt_ci_pct(agg):
+    if agg.n == 0:
+        return "n/a"
+    if agg.n < 2:
+        return fmt_pct(agg.mean)
+    return f"{fmt_pct(agg.mean)} ±{fmt_pct(agg.ci)}"
+
+
 # Which family each strategy belongs to, for the narrative grouping.
 FAMILY = {
     "direct": "Transport baselines (raw bytes)",
@@ -248,6 +264,10 @@ def build_aggregates(records):
             metrics["throughput"] = Agg([r["end_to_end_throughput"] for r in rows])
             metrics["mb_per_sec"] = Agg([r["mb_per_sec"] for r in rows])
             metrics["dropped"] = Agg([r["dropped"] for r in rows])
+            # Program slowdown from the interleaved-work model. Absent / null in
+            # older runs (or when lines_per_log=0); Agg drops the Nones so such
+            # cells simply report n/a.
+            metrics["slowdown_pct"] = Agg([r.get("slowdown_pct") for r in rows])
             metrics["_n_trials"] = len(rows)
             agg[cell][strat] = metrics
     return agg
@@ -285,7 +305,7 @@ def report(run_dir, agg, meta, files):
                   "rustc", "build_host", "remote", "git_commit", "started",
                   "finished", "trials_requested", "messages", "warmup",
                   "writer_buf", "full_policy", "msg_sizes", "producers",
-                  "rates", "buffers"):
+                  "rates", "buffers", "lines_per_log"):
             if k in meta and meta[k] not in (None, ""):
                 env_rows.append((f"`{k}`", meta[k]))
         A(md_table(["field", "value"], env_rows))
@@ -323,6 +343,24 @@ def report(run_dir, agg, meta, files):
         "real-crate strategies pay their genuine timestamp/level/format/sink "
         "cost, which is the whole point of the comparison.\n"
     )
+    any_slowdown = any(
+        agg[c][s]["slowdown_pct"].n > 0 for c in agg for s in agg[c]
+    )
+    if any_slowdown:
+        lpl = meta.get("lines_per_log")
+        every = f"every **{lpl}** lines of code" if lpl else "every N lines of code"
+        A(
+            f"**Program slowdown.** To turn the per-call cost into an applied "
+            f"figure, each case also models logging interleaved with real work: "
+            f"the producer runs a calibrated chunk of synthetic CPU work "
+            f"(standing in for {every}) between consecutive `log()` calls. Every "
+            f"case is timed twice — once running only that work (the no-logging "
+            f"baseline) and once running the work *and* the `log()` calls — and "
+            f"the **slowdown** is how much longer the logged run took as a "
+            f"percentage of the baseline (`100 × logging_time / work_time`). It "
+            f"answers \"how much does this logger slow my program down?\" rather "
+            f"than just \"how long is one `log()` call?\".\n"
+        )
     if cores is not None:
         A(
             f"This machine has **{cores} core(s)**. Workloads whose producer count "
@@ -357,6 +395,15 @@ def report(run_dir, agg, meta, files):
     best_thr = max(summary, key=lambda s: agg[primary][s]["throughput"].mean)
     a = agg[primary][best_thr]["throughput"]
     A(f"- **Highest end-to-end throughput:** `{best_thr}` — {fmt_ci_rate(a)}.")
+    # Smallest program slowdown (only when the work model was enabled).
+    slow = [s for s in summary if agg[primary][s]["slowdown_pct"].n > 0]
+    if slow:
+        best_slow = min(slow, key=lambda s: agg[primary][s]["slowdown_pct"].mean)
+        a = agg[primary][best_slow]["slowdown_pct"]
+        lpl = meta.get("lines_per_log")
+        every = f" when logging every {lpl} lines of code" if lpl else ""
+        A(f"- **Smallest program slowdown{every}:** `{best_slow}` — "
+          f"{fmt_ci_pct(a)} slower than the same work with no logging.")
 
     # Best per family on p99
     A("\n**Best in each family (by mean p99 at the representative workload):**\n")
@@ -464,19 +511,27 @@ def rank_cell(cell_aggs):
 
 def leaderboard_table(cell_aggs):
     strats = sorted(cell_aggs.keys(), key=lambda s: cell_aggs[s]["p99_ns"].mean)
+    # Only show the slowdown column when at least one strategy actually measured
+    # it (the work model was enabled for this run).
+    has_slowdown = any(cell_aggs[s]["slowdown_pct"].n > 0 for s in strats)
     headers = ["#", "strategy", "family", "trials", "p50", "p99", "p99.9",
                "throughput", "p99 CV%"]
+    if has_slowdown:
+        headers.append("slowdown")
     rows = []
     for i, s in enumerate(strats, 1):
         m = cell_aggs[s]
-        rows.append((
+        row = [
             i, f"`{s}`", FAMILY.get(s, "?"), m["_n_trials"],
             fmt_ci_ns(m["p50_ns"]),
             fmt_ci_ns(m["p99_ns"]),
             fmt_ci_ns(m["p999_ns"]),
             fmt_ci_rate(m["throughput"]),
             f"{m['p99_ns'].cv:.1f}" if m["p99_ns"].cv == m["p99_ns"].cv else "n/a",
-        ))
+        ]
+        if has_slowdown:
+            row.append(fmt_ci_pct(m["slowdown_pct"]))
+        rows.append(tuple(row))
     return md_table(headers, rows)
 
 

@@ -96,6 +96,7 @@ Shortcuts for `--strategies`: `all` (the four transport baselines, the default),
 | **Buffer**      | `--buffers`    | `8192`         | Channel capacity in records (`0` = unbounded). Ignored by `direct`. |
 | Producers       | `--producers`  | `4`            | Concurrent threads on the logging hot path.                    |
 | **Log rate**    | `--rates`      | `0`            | Target records/sec **per producer** (`0` = max throughput).    |
+| **Lines/log**   | `--lines-per-log` | `30`        | Synthetic code-lines of work between `log()` calls; drives the **slowdown** column (`0` disables it). |
 | Messages        | `--messages`   | `200000`       | Measured records per producer per case.                        |
 | Warmup          | `--warmup`     | `5000`         | Untimed records per producer before measuring.                 |
 | Writer buffer   | `--writer-buf` | `65536`        | Bytes for the background `BufWriter`.                          |
@@ -115,6 +116,16 @@ The table reports, per case:
 - **thrpt** — end-to-end records/sec, including the drain/flush phase.
 - **MB/s** — payload throughput, including drain.
 - **drop** — records lost (only possible under `--full-policy drop`).
+- **lines / slowdn** — the interleaved-work model. With `--lines-per-log N`
+  (default `30`) each producer runs a calibrated chunk of synthetic CPU work
+  standing in for ~N lines of code between consecutive `log()` calls, and the
+  case is timed both with and without the `log()` calls. **slowdn** is how much
+  longer the program ran *because of logging* (`100 × logging_time /
+  work_time`) — i.e. the actual device slowdown for logging every ~N lines.
+  `--lines-per-log 0` disables it (the column shows `—`). At startup `logbench`
+  prints the calibrated cost of one synthetic line so you can judge how your
+  real code compares (e.g. tune `--lines-per-log` up if your inter-log code is
+  heavier than simple arithmetic).
 
 The **Recommendations** section then picks, for each comparable workload, the
 lowest-tail-latency *lossless* strategy and the highest-throughput strategy on
@@ -139,6 +150,10 @@ cargo run --release -- --rates 50000 --msg-sizes 256 --producers 4
 
 # Lossy mode: how non-blocking can you get if you accept dropped lines?
 cargo run --release -- --full-policy drop --buffers 1024 --producers 8
+
+# Quantify the program slowdown of logging at different code densities
+# (a log line every 10 / 30 / 100 lines of code).
+cargo run --release -- --lines-per-log 10,30,100 --msg-sizes 256 --producers 1
 
 # Keep the produced log files for inspection.
 cargo run --release -- --keep-logs --out-dir ./my-run
