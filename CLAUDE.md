@@ -35,6 +35,18 @@ SMOKE=1 scripts/overnight.sh                        # ~1 min end-to-end pipeline
 python3 scripts/aggregate.py overnight-out          # re-aggregate an existing run directory
 ```
 
+`aggregate.py` writes three artifacts into the run directory: `REPORT.md` (the
+human-readable report — including a "What is being tested" section that spells out
+every strategy/layer/metric, and a "How payload size changes the ranking" section
+that surfaces small-vs-large-message crossovers in text), `summary_stats.csv`
+(every aggregate row), and **`plots.html`** — interactive Bokeh charts of each
+metric vs. payload size, one line per strategy. The HTML is self-contained except
+that it loads BokehJS from a CDN at view time, so `aggregate.py` stays std-lib-only
+(no `pip install` needed to build a report). Open `plots.html` in a browser to see
+where one crate overtakes another as messages grow. When adding a strategy, add its
+row to `STRATEGY_INFO` in `aggregate.py` (crate / description / layers / global)
+alongside the `config.rs` wiring, or it shows up as `?` in the report tables.
+
 `bench-out/`, `overnight-out/`, `smoke-out/` and `*.log` are gitignored. The
 curated `sample-report/` IS committed as an illustrative example of overnight output.
 
