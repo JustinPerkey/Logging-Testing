@@ -111,6 +111,7 @@ pub fn build(strategy: Strategy, cfg: &LoggerConfig) -> std::io::Result<Arc<dyn 
         Strategy::TracingFmt => tracing_full::build_fmt(cfg)?,
         Strategy::TracingNonBlocking => tracing_full::build_non_blocking(cfg)?,
         Strategy::TracingSpan => tracing_full::build_span(cfg)?,
+        Strategy::TracingJson => tracing_full::build_json(cfg)?,
         Strategy::Ftlog => ftlog_logger::build(cfg)?,
     })
 }

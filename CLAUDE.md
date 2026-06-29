@@ -24,7 +24,7 @@ Always benchmark in release — the `[profile.release]` enables LTO + `opt-level
 cargo build --release
 ./target/release/logbench                          # default: the 4 transport baselines
 ./target/release/logbench --strategies tracing-fmt # one real crate (see global note)
-./target/release/logbench --strategies every       # all 13 (globals get skipped, see below)
+./target/release/logbench --strategies every       # all 14 (globals get skipped, see below)
 
 cargo test --release                               # integration + unit tests
 cargo test --release durably                       # run a single test by name substring
@@ -82,8 +82,8 @@ baseline phase entirely and the run is a pure back-to-back logging measurement
 
 Source layout (`src/`):
 
-- `config.rs` — `Strategy` (the 13 variants + `ALL`/`CRATES`/`EVERY` sets,
-  `name()`, `is_global`/`is_real_crate`/`is_async`, `FromStr` aliases), `FullPolicy`
+- `config.rs` — `Strategy` (the 14 variants + `ALL`/`CRATES`/`EVERY` sets,
+  `name()`, `is_global`/`is_real_crate`/`is_async`/`is_combined`, `FromStr` aliases), `FullPolicy`
   (`block` = lossless back-pressure / `drop` = lossy), `LoggerConfig`, `Workload`
   (incl. `lines_per_log`, the inter-log synthetic-work knob).
 - `runner.rs` — the measurement loop (`run_case`, `run_producer`, payload
@@ -113,6 +113,18 @@ raw payload bytes with no formatting; **real crates** (`log_facade`,
 `slog_logger`, `tracing_full`, `ftlog_logger`) drive the crate's real macro →
 format → sink path. Real-crate backends use `record_str()` to turn the payload
 into the message string they log.
+
+These two families isolate one logging concern at a time, but the concerns —
+**facade**, **structured** fields, **formatting**, async **transport** — are
+layers a real solution composes, not rival choices. Several strategies are
+already combinations (`tracing-nb` = facade + fmt + async; `slog-async` =
+structured + async; `ftlog` = facade + dedicated-thread transport). The
+`tracing-json` strategy (`tracing_full::build_json`, marked by
+`Strategy::is_combined`) deliberately stacks all four layers — structured fields
++ JSON formatting + non-blocking async transport — to model a realistic
+production stack rather than one isolated layer. The README's "These 'types' are
+layers, not separate options" section is the canonical write-up of this framing;
+keep it in sync when adding combinations.
 
 ### Adding a strategy
 

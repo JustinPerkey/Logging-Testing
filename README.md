@@ -57,6 +57,7 @@ measured latency includes everything the crate does per record.
 | `tracing-fmt`   | `tracing` + `tracing-subscriber` | Instrumentation (sync fmt)   | Yes     |
 | `tracing-nb`    | `tracing` + `tracing-appender`   | Instrumentation (async)      | Yes     |
 | `tracing-span`  | `tracing` (span-wrapped events)  | Instrumentation (+ spans)    | Yes     |
+| `tracing-json`  | `tracing` + JSON + appender      | **Combined** stack (structured + JSON + async) | Yes |
 | `ftlog`         | `ftlog`                          | High-throughput async        | Yes     |
 
 ### Transport baselines (raw bytes, no formatting)
@@ -73,7 +74,7 @@ the real crates an honest reference point.
 | `tracing-appender` | The `tracing-appender` `NonBlocking` writer (the queue, without formatting). | Yes           |
 
 Shortcuts for `--strategies`: `all` (the four transport baselines, the default),
-`crates` (all nine real crates), `every` (both).
+`crates` (all ten real crates), `every` (both).
 
 > **One global logger per process.** The `log` facade and `tracing`'s global
 > default subscriber can each be installed only **once per process**, so the
@@ -84,6 +85,42 @@ Shortcuts for `--strategies`: `all` (the four transport baselines, the default),
 > **each strategy in its own process**, which is also better for statistical
 > isolation. `slog` is the one real crate that is *not* global — a
 > `slog::Logger` is an ordinary value.
+
+## These "types" are layers, not separate options
+
+The tables above split strategies into categories — transport baselines vs. real
+crates, and within the crates a "Kind" column (simple `log`-facade backend,
+structured, instrumentation, high-throughput async). It is tempting to read those
+as **mutually exclusive choices**: pick *either* structured logging *or* an async
+transport *or* a formatting backend. They are not. A real logging solution is a
+**stack of layers**, and most of these strategies already combine several:
+
+| Layer            | What it does                                      | Where you see it isolated here | Where it's combined |
+| ---------------- | ------------------------------------------------- | ------------------------------ | ------------------- |
+| **Facade**       | The call-site API (`log!`, `tracing::info!`, `slog::info!`) that decouples call sites from the backend | `env_logger`, `fern`, `log4rs` | every real crate |
+| **Structured**   | Real key/value fields, not just a message string  | `slog`                         | `tracing-json`, `slog-async` |
+| **Formatting**   | Turning a record into bytes (text / JSON / etc.)  | the `fmt` layer in `tracing-fmt` | `tracing-json` (JSON), every backend |
+| **Transport**    | Getting those bytes off the hot path — a lock, a channel, a non-blocking queue, a dedicated thread | `direct`, `crossbeam`, `flume`, `tracing-appender` | `tracing-nb`, `slog-async`, `ftlog`, `tracing-json` |
+
+Read that way, several existing strategies are *already* combinations: `tracing-nb`
+is the instrumentation **facade** + text **formatting** + an async **transport**;
+`slog-async` is **structured** fields + an async **transport**; `ftlog` is the
+`log` **facade** + a dedicated-thread **transport**.
+
+To make the point concrete, **`tracing-json`** deliberately stacks all four layers
+at once — it is the idiomatic production `tracing` configuration: the `tracing`
+**facade** emits real **structured** key/value fields, a `tracing-subscriber`
+JSON **formatter** encodes each event, and a `tracing-appender` non-blocking
+writer is the async **transport**. Benchmarking it next to the strategies that
+isolate one layer apiece shows what each layer costs *and* what they cost stacked
+together — which is what you actually ship.
+
+```bash
+# The combined stack vs. the layers it's built from:
+./target/release/logbench --strategies tracing-json
+./target/release/logbench --strategies slog-async        # structured + async
+./target/release/logbench --strategies tracing-appender  # async transport alone
+```
 
 ## What gets swept
 
@@ -331,7 +368,7 @@ src/
     tracing_nb.rs    tracing-appender NonBlocking writer (no formatting)
     log_facade.rs    env_logger / fern / log4rs / flexi_logger (the `log` facade)
     slog_logger.rs   slog + slog-async (structured, non-global)
-    tracing_full.rs  tracing fmt / non-blocking / span variants (instrumentation)
+    tracing_full.rs  tracing fmt / non-blocking / span / combined-json variants
     ftlog_logger.rs  ftlog high-throughput async
 scripts/
   overnight.sh     statistically-significant overnight harness (one process/strategy)

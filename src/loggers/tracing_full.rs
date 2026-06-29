@@ -8,7 +8,11 @@
 //! * [`build_non_blocking`] — the same layer over a `tracing-appender`
 //!   non-blocking writer (the idiomatic non-blocking `tracing` file stack);
 //! * [`build_span`] — like `fmt`, but every event is wrapped in an entered span
-//!   to expose the cost of span-based instrumentation.
+//!   to expose the cost of span-based instrumentation;
+//! * [`build_json`] — a deliberately *combined* stack that layers several
+//!   logging types at once: real structured key/value fields, a JSON formatter,
+//!   and the `tracing-appender` non-blocking async transport. It stands in for a
+//!   realistic production logging solution rather than isolating one concern.
 //!
 //! `tracing` installs a global default subscriber, which can be set only once
 //! per process, so these are built behind [`claim_global`] and the overnight
@@ -58,12 +62,20 @@ struct TracingLogger {
     enter_span: bool,
     /// Whether a synchronous sink needs an explicit flush in `finish()`.
     sync_flush: bool,
+    /// Whether to attach real structured key/value fields to each event (the
+    /// combined `tracing-json` stack). The other variants log just the message.
+    structured: bool,
 }
 
 impl Logger for TracingLogger {
     fn log(&self, record: &[u8]) {
         let msg = record_str(record);
-        if self.enter_span {
+        if self.structured {
+            // Emit genuine structured fields alongside the message; the JSON
+            // formatter renders them as keys, exercising the field-encoding path
+            // a structured logging solution actually pays for.
+            tracing::info!(target: "logbench", bytes = msg.len(), "{}", msg);
+        } else if self.enter_span {
             let span = tracing::info_span!(target: "logbench", "op");
             let _enter = span.enter();
             tracing::info!(target: "logbench", "{}", msg);
@@ -112,6 +124,7 @@ pub fn build_fmt(cfg: &LoggerConfig) -> std::io::Result<Arc<dyn Logger>> {
     Ok(Arc::new(TracingLogger {
         enter_span: false,
         sync_flush: true,
+        structured: false,
     }))
 }
 
@@ -121,6 +134,7 @@ pub fn build_span(cfg: &LoggerConfig) -> std::io::Result<Arc<dyn Logger>> {
     Ok(Arc::new(TracingLogger {
         enter_span: true,
         sync_flush: true,
+        structured: false,
     }))
 }
 
@@ -151,6 +165,42 @@ pub fn build_non_blocking(cfg: &LoggerConfig) -> std::io::Result<Arc<dyn Logger>
     Ok(Arc::new(TracingLogger {
         enter_span: false,
         sync_flush: false,
+        structured: false,
+    }))
+}
+
+/// The combined stack: structured fields + JSON formatting + non-blocking async
+/// transport. This layers four logging "types" (facade, structured fields,
+/// formatting, async hand-off) into one logger to model a realistic production
+/// solution rather than isolating a single concern.
+pub fn build_json(cfg: &LoggerConfig) -> std::io::Result<Arc<dyn Logger>> {
+    claim_global(Strategy::TracingJson)?;
+    static INIT: Once = Once::new();
+    let mut result = Ok(());
+    let path = cfg.path.clone();
+    let cap = cfg.capacity;
+    INIT.call_once(|| {
+        result = (|| {
+            let file = File::create(&path)?;
+            let mut builder = tracing_appender::non_blocking::NonBlockingBuilder::default();
+            if cap > 0 {
+                builder = builder.buffered_lines_limit(cap);
+            }
+            let (writer, guard) = builder.finish(file);
+            let _ = NB_GUARD.set(guard);
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_writer(writer)
+                .with_target(false)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).map_err(to_io_err)
+        })();
+    });
+    result?;
+    Ok(Arc::new(TracingLogger {
+        enter_span: false,
+        sync_flush: false,
+        structured: true,
     }))
 }
 
