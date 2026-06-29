@@ -225,9 +225,25 @@ What it does:
   interval** (Student's t). When two strategies' intervals overlap, the report
   says so explicitly — they are *not statistically distinguishable* on your
   machine.
-- Produces **`overnight-out/REPORT.md`** (leaderboards per workload, best-in-each
-  crate-family, significance notes, caveats) and **`summary_stats.csv`** (mean /
-  CI / stdev / CV / min / median / max for every cell).
+- Produces three artifacts in `overnight-out/`:
+  - **`REPORT.md`** — leaderboards per workload, best-in-each crate-family,
+    significance notes and caveats, plus a **"What is being tested"** section that
+    spells out exactly what each strategy exercises (crate, the Facade /
+    Structured / Formatting / Transport layers it touches, global-or-not) and what
+    each metric (test type) means, and a **"How payload size changes the ranking"**
+    section that ranks strategies at the smallest vs. largest message size and
+    calls out the crossovers in plain text.
+  - **`plots.html`** — **interactive [Bokeh](https://bokeh.org) charts** of every
+    metric (p50 / p99 / p99.9 latency, throughput, program slowdown) plotted
+    against **payload size**, one line per strategy, on log axes. This is the view
+    that answers *"is this crate faster on small messages but slower on large
+    ones?"* — watch for lines that cross. Hover a point for its 95% CI; click a
+    legend entry to mute that strategy. The file is **fully self-contained and
+    renders offline** — BokehJS is inlined from the bundles vendored under
+    `scripts/vendor/bokehjs/`, so the aggregator needs no extra Python packages and
+    the report works on an air-gapped device.
+  - **`summary_stats.csv`** — mean / CI / stdev / CV / min / median / max for
+    every cell.
 
 It is safe to `Ctrl-C`: it aggregates whatever trials finished. A `MAX_HOURS`
 budget (default 10) stops launching new trials so it always lands a report by
@@ -254,7 +270,7 @@ the run. Point **`LOGBENCH_REMOTE`** at the device over SSH and
 2. **copies** it to the device and `chmod +x`'s it,
 3. runs **every trial on the device** over SSH,
 4. **copies each trial's results back** to this host as they complete,
-5. **aggregates the report here** — `REPORT.md`, `summary_stats.csv`, `run_meta.json`.
+5. **aggregates the report here** — `REPORT.md`, `plots.html`, `summary_stats.csv`, `run_meta.json`.
 
 ```bash
 # Same architecture as this host (e.g. another x86-64 box) — nothing else needed:
@@ -372,7 +388,7 @@ src/
     ftlog_logger.rs  ftlog high-throughput async
 scripts/
   overnight.sh     statistically-significant overnight harness (one process/strategy)
-  aggregate.py     trial aggregation → REPORT.md + summary_stats.csv (stdlib only)
+  aggregate.py     trial aggregation → REPORT.md + plots.html + summary_stats.csv (stdlib only)
 benches/logging.rs Criterion harness
 tests/integration.rs end-to-end correctness checks
 ```
