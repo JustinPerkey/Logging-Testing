@@ -70,7 +70,12 @@ When `lines_per_log > 0` the runner also measures the **program slowdown**: each
 producer first runs a no-logging baseline phase (the same calibrated synthetic
 work, `runner::do_work`, with the `log()` calls removed) and then the measured
 phase (work + `log()`), both barrier-synced and wall-clock-timed. The slowdown
-is `100 × (measured − baseline) / baseline`. `runner::calibrate_ns_per_line()`
+is `100 × log_busy / baseline`, where `log_busy` is the time the producer
+actually spent inside `log()` (the summed per-call latencies), **not** the
+measured-phase wall clock. Using the in-`log()` time keeps the slowdown
+independent of any `--rates` pacing: when a target rate is set the producer
+sleeps between calls, and that idle time must not be counted as logging cost.
+`runner::calibrate_ns_per_line()`
 reports the per-line work cost once for context. `lines_per_log == 0` skips the
 baseline phase entirely and the run is a pure back-to-back logging measurement
 (historical default behaviour).

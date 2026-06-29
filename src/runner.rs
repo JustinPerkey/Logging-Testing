@@ -84,20 +84,35 @@ fn wait_until(deadline: Instant) {
     }
 }
 
-/// Run a single producer thread, returning its per-call latency histogram.
+/// What one producer thread reports back to the runner.
+struct ProducerResult {
+    /// Per-call latency distribution of this producer's `log()` calls.
+    hist: Histogram<u64>,
+    /// Total nanoseconds this producer spent *inside* `log()` calls during the
+    /// measured phase. This is the sum of the per-call latencies, so — unlike
+    /// the phase wall clock — it excludes any rate-pacing idle the thread slept
+    /// through between calls. It is the pacing-independent cost of logging, used
+    /// to compute the program slowdown.
+    log_busy_ns: u128,
+}
+
+/// Run a single producer thread, returning its per-call latency histogram and
+/// the total time it spent inside `log()`.
 ///
 /// When `workload.lines_per_log > 0` the thread runs two barrier-synced phases:
 /// first a **work-only baseline** (the synthetic inter-log work with no logging)
 /// and then the **measured phase** (the same work *plus* a timed `log()` after
-/// every `lines_per_log` units). The runner times each phase's wall clock to
-/// derive the logging slowdown. With `lines_per_log == 0` there is no baseline
-/// phase and the loop is exactly a back-to-back logging measurement.
+/// every `lines_per_log` units). The slowdown is derived from `log_busy_ns`
+/// (the time actually spent in `log()`), not the measured-phase wall clock, so
+/// that rate-pacing sleeps between calls do not inflate it. With
+/// `lines_per_log == 0` there is no baseline phase and the loop is exactly a
+/// back-to-back logging measurement.
 fn run_producer(
     logger: Arc<dyn Logger>,
     barrier: Arc<Barrier>,
     workload: Workload,
     producer_idx: usize,
-) -> Histogram<u64> {
+) -> ProducerResult {
     let payload = make_payload(workload.msg_size, producer_idx);
     let mut hist = new_latency_hist();
     let lines = workload.lines_per_log;
@@ -131,6 +146,7 @@ fn run_producer(
         .filter(|r| *r > 0.0)
         .map(|r| Duration::from_secs_f64(1.0 / r));
     let start = Instant::now();
+    let mut log_busy_ns: u128 = 0;
 
     for i in 0..workload.messages_per_producer {
         if lines > 0 {
@@ -138,17 +154,21 @@ fn run_producer(
         }
         if let Some(interval) = interval {
             // Schedule against an absolute timeline so we don't accumulate drift.
+            // This sleep is rate-pacing idle and is deliberately *not* counted
+            // towards `log_busy_ns` below.
             wait_until(start + interval.mul_f64(i as f64));
         }
         let t0 = Instant::now();
         logger.log(&payload);
         let elapsed = t0.elapsed().as_nanos() as u64;
+        // Accumulate the actual time spent in log() (pacing-independent).
+        log_busy_ns += elapsed as u128;
         // Clamp into the histogram's representable range.
         let _ = hist.record(elapsed.clamp(1, 60_000_000_000));
     }
     std::hint::black_box(acc);
 
-    hist
+    ProducerResult { hist, log_busy_ns }
 }
 
 /// Run one cell of the sweep matrix and return its [`CaseResult`].
@@ -199,16 +219,23 @@ pub fn run_case(
     };
 
     let mut combined = new_latency_hist();
+    // The slowest producer's in-log() time gates the measured phase's wall
+    // clock, so take the max to stay comparable with the wall-clock baseline.
+    let mut max_log_busy_ns: u128 = 0;
     for h in handles {
-        let hist = h.join().expect("producer thread panicked");
-        combined.add(&hist).expect("compatible histogram bounds");
+        let res = h.join().expect("producer thread panicked");
+        combined.add(&res.hist).expect("compatible histogram bounds");
+        max_log_busy_ns = max_log_busy_ns.max(res.log_busy_ns);
     }
     let measured_secs = enqueue_start.elapsed().as_secs_f64();
+    let log_busy_secs = max_log_busy_ns as f64 / 1.0e9;
 
     // When the work model is on, the measured phase includes the inter-log work,
     // so the logging-attributable wall time is the measured time minus the
     // baseline work time. That keeps throughput an apples-to-apples logging
-    // figure and is what the slowdown percentage is computed against.
+    // figure. (The slowdown percentage is computed from `log_busy_secs`
+    // instead, so that rate pacing — which stretches the measured wall clock —
+    // does not contaminate it.)
     let enqueue_secs = if work_enabled {
         (measured_secs - work_only_secs).max(0.0)
     } else {
@@ -231,5 +258,6 @@ pub fn run_case(
         enqueue_secs,
         drain_secs,
         work_only_secs,
+        log_busy_secs,
     ))
 }

@@ -84,9 +84,16 @@ pub struct CaseResult {
     /// the `log()` calls removed). `0.0` when the work model is disabled.
     pub work_only_secs: f64,
     /// How much slower the program ran *because of logging*, as a percentage of
-    /// the no-logging baseline: `100 * logging_time / work_only_time`. `None`
-    /// when the work model is disabled (`lines_per_log == 0`). This is the
-    /// headline "device slowdown for logging every N lines" figure.
+    /// the no-logging baseline: `100 * log_busy_time / work_only_time`, where
+    /// `log_busy_time` is the time the producing thread actually spent inside
+    /// `log()`. `None` when the work model is disabled (`lines_per_log == 0`).
+    /// This is the headline "device slowdown for logging every N lines" figure.
+    ///
+    /// It is computed from the in-`log()` time rather than the measured-phase
+    /// wall clock so that it is **independent of any target rate**: rate pacing
+    /// makes the producer sleep between calls, and that idle time must not be
+    /// counted as logging cost (otherwise a slower rate would look like a bigger
+    /// slowdown even though each `log()` call is exactly as cheap).
     pub slowdown_pct: Option<f64>,
     /// Calibrated cost of one synthetic work unit ("line of code") on this
     /// machine, in nanoseconds. Informational context for `lines_per_log`
@@ -103,7 +110,10 @@ impl CaseResult {
     /// the baseline work time already subtracted out, so throughput stays an
     /// apples-to-apples logging figure. `work_only_secs` is the baseline (no
     /// logging) wall time, used to compute the slowdown percentage; pass `0.0`
-    /// when the work model is disabled.
+    /// when the work model is disabled. `log_busy_secs` is the time the
+    /// producing thread spent inside `log()` during the measured phase
+    /// (excluding any rate-pacing idle) and is what the slowdown is computed
+    /// against, so the figure is independent of the target rate.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         strategy: Strategy,
@@ -116,6 +126,7 @@ impl CaseResult {
         enqueue_secs: f64,
         drain_secs: f64,
         work_only_secs: f64,
+        log_busy_secs: f64,
     ) -> Self {
         let total = workload.total_messages();
         let delivered = total.saturating_sub(dropped);
@@ -137,9 +148,11 @@ impl CaseResult {
         };
 
         // Slowdown is only meaningful when the work model ran and produced a
-        // non-trivial baseline. `enqueue_secs` is already the logging-only time.
+        // non-trivial baseline. It is computed from `log_busy_secs` — the time
+        // actually spent inside `log()` — rather than the measured-phase wall
+        // clock, so rate-pacing idle between calls does not inflate it.
         let slowdown_pct = if workload.lines_per_log > 0 && work_only_secs > 0.0 {
-            Some(100.0 * enqueue_secs / work_only_secs)
+            Some(100.0 * log_busy_secs / work_only_secs)
         } else {
             None
         };
