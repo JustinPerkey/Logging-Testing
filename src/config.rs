@@ -15,10 +15,17 @@ use std::str::FromStr;
 /// * **Real logging crates** (everything else) drive an actual popular logging
 ///   crate through its real macro → format → sink path: `log`-facade backends
 ///   (`env_logger`, `fern`, `log4rs`, `flexi_logger`), the `tracing`
-///   instrumentation stack (plain events, a non-blocking writer, and
-///   span-wrapped events), structured `slog`, and the high-throughput `ftlog`.
-///   These capture the *crate differences* — timestamping, level filtering,
-///   field/encoding work and the writer machinery — that a raw transport hides.
+///   instrumentation stack (plain events, a non-blocking writer, span-wrapped
+///   events, and a combined JSON/structured/async stack), structured `slog`,
+///   and the high-throughput `ftlog`. These capture the *crate differences* —
+///   timestamping, level filtering, field/encoding work and the writer
+///   machinery — that a raw transport hides.
+///
+/// These two families isolate *one* logging concern at a time on purpose, but
+/// the concerns themselves — a call-site facade, structured fields, formatting,
+/// and an async hand-off — are **layers a real solution composes**, not rival
+/// choices. [`Strategy::TracingJson`] stacks all of them at once to make that
+/// concrete (see [`Strategy::is_combined`]).
 ///
 /// What every strategy has in common is that the benchmark measures the same
 /// thing: how long the producing thread is held inside a single `log()` call.
@@ -61,6 +68,15 @@ pub enum Strategy {
     /// Like [`Strategy::TracingFmt`] but each event is wrapped in an entered
     /// span, to show the cost of span-based instrumentation.
     TracingSpan,
+    /// A deliberately *combined* stack that layers several logging types at once:
+    /// the `tracing` instrumentation facade emits real **structured** key/value
+    /// fields, a `tracing-subscriber` **JSON** formatter encodes each event, and
+    /// a `tracing-appender` non-blocking writer provides the **async transport**
+    /// to the file. It exists to make the point that the logging "types" the
+    /// other strategies isolate (facade, structured fields, formatting, async
+    /// hand-off) are layers a real solution composes — not mutually exclusive
+    /// choices. See [`Strategy::is_combined`].
+    TracingJson,
     /// The high-throughput `ftlog` logger (dedicated log thread, `log` facade).
     Ftlog,
 }
@@ -79,7 +95,7 @@ impl Strategy {
     /// The real-logging-crate strategies, in a stable order. Most of these
     /// install a process-global logger (see [`Strategy::is_global`]), so the
     /// overnight harness runs each one in its own process.
-    pub const CRATES: [Strategy; 9] = [
+    pub const CRATES: [Strategy; 10] = [
         Strategy::LogEnvLogger,
         Strategy::LogFern,
         Strategy::LogLog4rs,
@@ -88,11 +104,12 @@ impl Strategy {
         Strategy::TracingFmt,
         Strategy::TracingNonBlocking,
         Strategy::TracingSpan,
+        Strategy::TracingJson,
         Strategy::Ftlog,
     ];
 
     /// Every strategy, transport baselines first then real crates.
-    pub const EVERY: [Strategy; 13] = [
+    pub const EVERY: [Strategy; 14] = [
         Strategy::Direct,
         Strategy::Crossbeam,
         Strategy::Flume,
@@ -105,6 +122,7 @@ impl Strategy {
         Strategy::TracingFmt,
         Strategy::TracingNonBlocking,
         Strategy::TracingSpan,
+        Strategy::TracingJson,
         Strategy::Ftlog,
     ];
 
@@ -123,8 +141,17 @@ impl Strategy {
             Strategy::TracingFmt => "tracing-fmt",
             Strategy::TracingNonBlocking => "tracing-nb",
             Strategy::TracingSpan => "tracing-span",
+            Strategy::TracingJson => "tracing-json",
             Strategy::Ftlog => "ftlog",
         }
+    }
+
+    /// Whether this strategy deliberately *combines* several logging types in a
+    /// single stack (facade + structured fields + formatting + async transport)
+    /// rather than isolating one. Informational: it marks the strategies that
+    /// stand in for a realistic, layered production logging solution.
+    pub fn is_combined(self) -> bool {
+        matches!(self, Strategy::TracingJson)
     }
 
     /// Whether this strategy formats a real log record (level, timestamp,
@@ -153,6 +180,7 @@ impl Strategy {
                 | Strategy::TracingFmt
                 | Strategy::TracingNonBlocking
                 | Strategy::TracingSpan
+                | Strategy::TracingJson
                 | Strategy::Ftlog
         )
     }
@@ -166,6 +194,7 @@ impl Strategy {
                 | Strategy::TracingAppender
                 | Strategy::SlogAsync
                 | Strategy::TracingNonBlocking
+                | Strategy::TracingJson
                 | Strategy::Ftlog
         )
     }
@@ -201,11 +230,14 @@ impl FromStr for Strategy {
                 Ok(Strategy::TracingNonBlocking)
             }
             "tracing-span" | "tracing-spans" => Ok(Strategy::TracingSpan),
+            "tracing-json" | "tracing-structured" | "tracing-combined" => {
+                Ok(Strategy::TracingJson)
+            }
             "ftlog" => Ok(Strategy::Ftlog),
             other => Err(format!(
                 "unknown strategy '{other}' (expected one of: direct, crossbeam, flume, \
                  tracing-appender, env_logger, fern, log4rs, flexi_logger, slog-async, \
-                 tracing-fmt, tracing-nb, tracing-span, ftlog)"
+                 tracing-fmt, tracing-nb, tracing-span, tracing-json, ftlog)"
             )),
         }
     }
