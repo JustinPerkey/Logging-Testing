@@ -122,6 +122,9 @@ The table reports, per case:
   case is timed both with and without the `log()` calls. **slowdn** is how much
   longer the program ran *because of logging* (`100 × logging_time /
   work_time`) — i.e. the actual device slowdown for logging every ~N lines.
+  `logging_time` is the time actually spent inside `log()`, so the figure is
+  independent of `--rates`: rate pacing makes the producer *sleep* between calls,
+  and that idle time is not logging cost, so it is excluded.
   `--lines-per-log 0` disables it (the column shows `—`). At startup `logbench`
   prints the calibrated cost of one synthetic line so you can judge how your
   real code compares (e.g. tune `--lines-per-log` up if your inter-log code is
