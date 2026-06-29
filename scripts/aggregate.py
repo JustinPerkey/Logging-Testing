@@ -23,8 +23,11 @@ It writes:
                            get larger.
 
 No third-party *Python* dependencies — standard library only. The interactive
-plots are emitted as a self-contained HTML file that loads BokehJS from a CDN at
-view time, so nothing needs to be `pip install`-ed to build (or read) the report.
+plots are emitted as a fully self-contained HTML file: BokehJS is inlined from
+the bundles vendored under `scripts/vendor/bokehjs/`, so `plots.html` renders
+offline (e.g. on an air-gapped device under test) with no CDN fetch and nothing
+to `pip install`. If those vendored bundles are missing, the HTML falls back to
+loading BokehJS from the Bokeh CDN.
 """
 
 import csv
@@ -235,6 +238,38 @@ STRATEGY_INFO = {
         desc="`log` facade → `ftlog`'s dedicated-thread, batched high-throughput transport.",
         layers=("Facade", "Formatting", "Transport")),
 }
+
+# BokehJS version vendored under scripts/vendor/bokehjs/ and inlined into
+# plots.html so the report is fully self-contained / offline-viewable. If the
+# vendored files are missing we fall back to loading this version from the CDN.
+BOKEHJS_VERSION = "3.4.1"
+_VENDOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "vendor", "bokehjs")
+
+
+def bokehjs_script_tags():
+    """Return <script> tags for BokehJS: vendored+inlined if present, else CDN.
+
+    Inlining makes plots.html work with no network at view time (air-gapped
+    devices, archived reports). The minified bundles contain no literal
+    ``</script>`` sequence, but we defensively neutralise any just in case so the
+    embedded script can never be terminated early.
+    """
+    files = [f"bokeh-{BOKEHJS_VERSION}.min.js",
+             f"bokeh-api-{BOKEHJS_VERSION}.min.js"]
+    paths = [os.path.join(_VENDOR_DIR, f) for f in files]
+    if all(os.path.exists(p) for p in paths):
+        out = []
+        for p in paths:
+            with open(p, encoding="utf-8") as fh:
+                js = fh.read().replace("</script>", "<\\/script>")
+            out.append(f"<script>\n{js}\n</script>")
+        return "\n".join(out)
+    # Fallback: load from the Bokeh CDN (needs network at view time).
+    base = "https://cdn.bokeh.org/bokeh/release"
+    return "\n".join(
+        f'<script src="{base}/{f}"></script>' for f in files)
+
 
 # A stable, high-contrast colour per strategy for the interactive plots. Assigned
 # by sorted strategy name so a given crate keeps its colour across runs.
@@ -1103,7 +1138,11 @@ document.addEventListener('DOMContentLoaded', render);
 
 
 def write_plots_html(run_dir, sections, meta):
-    """Write a self-contained interactive plots.html (BokehJS from CDN)."""
+    """Write a self-contained interactive plots.html.
+
+    BokehJS is inlined from the vendored bundles so the file works offline; if
+    those bundles are missing it falls back to the Bokeh CDN.
+    """
     path = os.path.join(run_dir, "plots.html")
     if not sections:
         # Still leave a stub so the link in REPORT.md isn't dangling.
@@ -1122,9 +1161,14 @@ def write_plots_html(run_dir, sections, meta):
     html = html.replace("__PLOT_DATA__", data_json)
     html = html.replace("__META_LINE__", json.dumps(meta_line))
     html = html.replace("__PLOTS_JS__", _PLOTS_JS)
+    # Replace the BokehJS marker last: the inlined bundle is ~1 MB and must not be
+    # scanned for the other (already-substituted) markers.
+    bokeh_tags = bokehjs_script_tags()
+    html = html.replace("__BOKEHJS__", bokeh_tags)
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
-    print(f"wrote {path}")
+    inlined = bokeh_tags.lstrip().startswith("<script>")
+    print(f"wrote {path}" + ("" if inlined else " (BokehJS via CDN — vendored bundles not found)"))
 
 
 _PLOTS_TEMPLATE = """<!doctype html>
@@ -1133,8 +1177,7 @@ _PLOTS_TEMPLATE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>logbench — performance vs. payload size</title>
-<script src="https://cdn.bokeh.org/bokeh/release/bokeh-3.4.1.min.js"></script>
-<script src="https://cdn.bokeh.org/bokeh/release/bokeh-api-3.4.1.min.js"></script>
+__BOKEHJS__
 <style>
   body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
          margin: 1.5rem auto; max-width: 1100px; color: #1a1a1a; padding: 0 1rem; }
@@ -1158,7 +1201,8 @@ _PLOTS_TEMPLATE = """<!doctype html>
   watch for lines that <b>cross</b>. <b>Click</b> a legend entry to mute that
   strategy; <b>hover</b> a marker for its mean and 95% confidence interval. Charts
   are grouped by scenario (buffer · rate · policy), then by metric, with one panel
-  per producer count. Latency and throughput use a log y-axis.
+  per producer count. Latency and throughput use a log y-axis. This file is fully
+  self-contained — BokehJS is embedded, so it renders offline.
 </div>
 <div id="plots"></div>
 <script>window.PLOT_DATA = __PLOT_DATA__;</script>

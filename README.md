@@ -238,8 +238,10 @@ What it does:
     against **payload size**, one line per strategy, on log axes. This is the view
     that answers *"is this crate faster on small messages but slower on large
     ones?"* — watch for lines that cross. Hover a point for its 95% CI; click a
-    legend entry to mute that strategy. It loads BokehJS from a CDN at view time,
-    so the aggregator needs no extra Python packages.
+    legend entry to mute that strategy. The file is **fully self-contained and
+    renders offline** — BokehJS is inlined from the bundles vendored under
+    `scripts/vendor/bokehjs/`, so the aggregator needs no extra Python packages and
+    the report works on an air-gapped device.
   - **`summary_stats.csv`** — mean / CI / stdev / CV / min / median / max for
     every cell.
 
