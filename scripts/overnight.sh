@@ -77,7 +77,7 @@ RATES="${RATES:-0}"                          # 0 = max throughput; or rec/s per 
 LINES_PER_LOG="${LINES_PER_LOG:-30}"         # synthetic code-lines between log() calls (0 disables slowdown model)
 WRITER_BUF="${WRITER_BUF:-65536}"            # background BufWriter size (bytes)
 FULL_POLICY="${FULL_POLICY:-block}"          # block (lossless) or drop (lossy)
-STRATEGIES="${STRATEGIES:-direct,crossbeam,flume,tracing-appender,env_logger,fern,log4rs,flexi_logger,slog-async,tracing-fmt,tracing-nb,tracing-span,ftlog}"
+STRATEGIES="${STRATEGIES:-direct,crossbeam,flume,tracing-appender,env_logger,fern,log4rs,flexi_logger,slog-async,tracing-fmt,tracing-nb,tracing-span,tracing-json,ftlog}"
 # OUT_DIR is defaulted *after* the SMOKE block so smoke runs land in smoke-out
 # unless the user set OUT_DIR explicitly.
 MAX_HOURS="${MAX_HOURS:-10}"                 # stop launching new trials after this
