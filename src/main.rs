@@ -14,11 +14,11 @@ use logbench::runner::run_case;
 #[derive(Parser, Debug)]
 #[command(name = "logbench", version, about, long_about = None)]
 struct Cli {
-    /// Strategies to test (comma-separated), or a shortcut: "all" (the four
+    /// Strategies to test (comma-separated), or a shortcut: "all" (the five
     /// transport baselines), "crates" (every real logging crate), or "every"
     /// (both). Individual names: direct, crossbeam, flume, tracing-appender,
-    /// env_logger, fern, log4rs, flexi_logger, slog-async, tracing-fmt,
-    /// tracing-nb, tracing-span, ftlog.
+    /// tokio-fs, env_logger, fern, log4rs, flexi_logger, slog-async,
+    /// tracing-fmt, tracing-nb, tracing-span, tracing-json, ftlog.
     ///
     /// NOTE: each real crate installs a process-global logger, so only one
     /// global crate may be named per process — use `scripts/overnight.sh` to

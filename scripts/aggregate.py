@@ -149,6 +149,7 @@ FAMILY = {
     "crossbeam": "Transport baselines (raw bytes)",
     "flume": "Transport baselines (raw bytes)",
     "tracing-appender": "Transport baselines (raw bytes)",
+    "tokio-fs": "Transport baselines (raw bytes)",
     "env_logger": "`log` facade backends",
     "fern": "`log` facade backends",
     "log4rs": "`log` facade backends",
@@ -192,6 +193,10 @@ STRATEGY_INFO = {
     "tracing-appender": dict(
         crate="tracing-appender", global_=False,
         desc="`tracing-appender`'s `NonBlocking` queue carrying raw bytes — the transport with no formatting.",
+        layers=("Transport",)),
+    "tokio-fs": dict(
+        crate="tokio", global_=False,
+        desc="tokio mpsc channel → writer task on a dedicated runtime, batched into an async `tokio::fs::File`.",
         layers=("Transport",)),
     "env_logger": dict(
         crate="log + env_logger", global_=True,
@@ -477,7 +482,7 @@ def report(run_dir, agg, meta, files):
         "overlap, the difference between them is within run-to-run noise and we "
         "say they are *not statistically distinguishable* on this machine. The "
         "transport baselines (`direct`, `crossbeam`, `flume`, "
-        "`tracing-appender`) write raw bytes and pay **no formatting cost**; the "
+        "`tracing-appender`, `tokio-fs`) write raw bytes and pay **no formatting cost**; the "
         "real-crate strategies pay their genuine timestamp/level/format/sink "
         "cost, which is the whole point of the comparison.\n"
     )

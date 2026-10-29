@@ -3,7 +3,7 @@
 //! A small, self-contained benchmark engine for comparing **real Rust logging
 //! crates** — `env_logger`, `fern`, `log4rs`, `flexi_logger`, `slog`, the
 //! `tracing` instrumentation stack and `ftlog` — alongside raw **async
-//! transport baselines** (direct, crossbeam, flume, tracing-appender).
+//! transport baselines** (direct, crossbeam, flume, tracing-appender, tokio-fs).
 //!
 //! The central question this crate answers is: *given my hardware, my message
 //! sizes, my buffer budget and my log rate, which logging crate keeps the hot
