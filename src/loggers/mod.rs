@@ -7,7 +7,8 @@
 //!
 //! Two families live here:
 //!
-//! * **transport baselines** ([`direct`], [`channel`], [`tracing_nb`]) write the
+//! * **transport baselines** ([`direct`], [`channel`], [`tracing_nb`],
+//!   [`tokio_fs`]) write the
 //!   raw payload bytes through different hand-off mechanisms; and
 //! * **real logging crates** ([`log_facade`], [`slog_logger`], [`tracing_full`],
 //!   [`ftlog_logger`]) drive an actual crate through its real macro → format →
@@ -24,6 +25,7 @@ mod direct;
 mod ftlog_logger;
 mod log_facade;
 mod slog_logger;
+mod tokio_fs;
 mod tracing_full;
 mod tracing_nb;
 
@@ -103,6 +105,7 @@ pub fn build(strategy: Strategy, cfg: &LoggerConfig) -> std::io::Result<Arc<dyn 
         Strategy::Crossbeam => Arc::new(channel::CrossbeamLogger::new(cfg)?),
         Strategy::Flume => Arc::new(channel::FlumeLogger::new(cfg)?),
         Strategy::TracingAppender => Arc::new(tracing_nb::TracingAppenderLogger::new(cfg)?),
+        Strategy::TokioFs => Arc::new(tokio_fs::TokioFsLogger::new(cfg)?),
         Strategy::LogEnvLogger => log_facade::build_env_logger(cfg)?,
         Strategy::LogFern => log_facade::build_fern(cfg)?,
         Strategy::LogLog4rs => log_facade::build_log4rs(cfg)?,

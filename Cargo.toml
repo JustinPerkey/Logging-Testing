@@ -22,6 +22,9 @@ flume = "0.11"
 hdrhistogram = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Async file I/O transport baseline (`tokio-fs`): a tokio mpsc channel feeding a
+# writer task on a dedicated runtime that writes via `tokio::fs::File`.
+tokio = { version = "1", features = ["rt", "fs", "io-util", "sync"] }
 
 # --- real logging crates under test ----------------------------------------
 # The `log` facade plus a spread of popular backends, the `tracing`

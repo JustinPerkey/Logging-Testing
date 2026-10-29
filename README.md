@@ -4,7 +4,7 @@
 crates** head-to-head — `env_logger`, `fern`, `log4rs`, `flexi_logger`, `slog`,
 the `tracing` instrumentation stack and the high-throughput `ftlog` — alongside
 a set of raw **async transport baselines** (`direct`, `crossbeam`, `flume`,
-`tracing-appender`). Clone it, run it on *your* machine, and it will tell you
+`tracing-appender`, `tokio-fs`). Clone it, run it on *your* machine, and it will tell you
 which logging crate keeps your hot path fastest while still durably writing
 every record — for *your* message sizes, buffer budget, log rate and thread
 count.
@@ -72,8 +72,9 @@ the real crates an honest reference point.
 | `crossbeam`        | `crossbeam-channel` → single background writer thread.                       | Yes           |
 | `flume`            | `flume` channel → single background writer thread.                           | Yes           |
 | `tracing-appender` | The `tracing-appender` `NonBlocking` writer (the queue, without formatting). | Yes           |
+| `tokio-fs`         | tokio mpsc channel → writer task on a dedicated tokio runtime writing an async `tokio::fs::File`, draining in batches (`recv_many` + `BufWriter`) to cut the number of writes. | Yes |
 
-Shortcuts for `--strategies`: `all` (the four transport baselines, the default),
+Shortcuts for `--strategies`: `all` (the five transport baselines, the default),
 `crates` (all ten real crates), `every` (both).
 
 > **One global logger per process.** The `log` facade and `tracing`'s global
@@ -100,7 +101,7 @@ transport *or* a formatting backend. They are not. A real logging solution is a
 | **Facade**       | The call-site API (`log!`, `tracing::info!`, `slog::info!`) that decouples call sites from the backend | `env_logger`, `fern`, `log4rs` | every real crate |
 | **Structured**   | Real key/value fields, not just a message string  | `slog`                         | `tracing-json`, `slog-async` |
 | **Formatting**   | Turning a record into bytes (text / JSON / etc.)  | the `fmt` layer in `tracing-fmt` | `tracing-json` (JSON), every backend |
-| **Transport**    | Getting those bytes off the hot path — a lock, a channel, a non-blocking queue, a dedicated thread | `direct`, `crossbeam`, `flume`, `tracing-appender` | `tracing-nb`, `slog-async`, `ftlog`, `tracing-json` |
+| **Transport**    | Getting those bytes off the hot path — a lock, a channel, a non-blocking queue, a dedicated thread | `direct`, `crossbeam`, `flume`, `tracing-appender`, `tokio-fs` | `tracing-nb`, `slog-async`, `ftlog`, `tracing-json` |
 
 Read that way, several existing strategies are *already* combinations: `tracing-nb`
 is the instrumentation **facade** + text **formatting** + an async **transport**;
@@ -382,6 +383,7 @@ src/
     direct.rs        Mutex<BufWriter> baseline
     channel.rs       crossbeam + flume background-writer strategies
     tracing_nb.rs    tracing-appender NonBlocking writer (no formatting)
+    tokio_fs.rs      tokio channel → async tokio::fs::File writer task (batched)
     log_facade.rs    env_logger / fern / log4rs / flexi_logger (the `log` facade)
     slog_logger.rs   slog + slog-async (structured, non-global)
     tracing_full.rs  tracing fmt / non-blocking / span / combined-json variants

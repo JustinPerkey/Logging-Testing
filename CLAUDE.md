@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `logbench` is a self-contained Rust suite that benchmarks real Rust logging
 crates (`env_logger`, `fern`, `log4rs`, `flexi_logger`, `slog`, the `tracing`
 stack, `ftlog`) against each other and against raw async transport baselines
-(`direct`, `crossbeam`, `flume`, `tracing-appender`). The metric that matters
+(`direct`, `crossbeam`, `flume`, `tracing-appender`, `tokio-fs`). The metric that matters
 most is **how long the `log()` call holds the producing thread** — the hot-path
 latency distribution (p50/p99/p99.9/max) — alongside throughput, drain cost and
 dropped records. It also turns that per-call cost into an applied figure: the
@@ -22,9 +22,9 @@ Always benchmark in release — the `[profile.release]` enables LTO + `opt-level
 
 ```bash
 cargo build --release
-./target/release/logbench                          # default: the 4 transport baselines
+./target/release/logbench                          # default: the 5 transport baselines
 ./target/release/logbench --strategies tracing-fmt # one real crate (see global note)
-./target/release/logbench --strategies every       # all 14 (globals get skipped, see below)
+./target/release/logbench --strategies every       # all 15 (globals get skipped, see below)
 
 cargo test --release                               # integration + unit tests
 cargo test --release durably                       # run a single test by name substring
@@ -96,7 +96,7 @@ baseline phase entirely and the run is a pure back-to-back logging measurement
 
 Source layout (`src/`):
 
-- `config.rs` — `Strategy` (the 14 variants + `ALL`/`CRATES`/`EVERY` sets,
+- `config.rs` — `Strategy` (the 15 variants + `ALL`/`CRATES`/`EVERY` sets,
   `name()`, `is_global`/`is_real_crate`/`is_async`/`is_combined`, `FromStr` aliases), `FullPolicy`
   (`block` = lossless back-pressure / `drop` = lossy), `LoggerConfig`, `Workload`
   (incl. `lines_per_log`, the inter-log synthetic-work knob).
@@ -122,7 +122,7 @@ Implementations must be `Send + Sync` (the runner clones an `Arc<dyn Logger>`
 into each producer). `loggers::build()` is the single dispatch point from
 `Strategy` to a concrete logger.
 
-Two families: **transport baselines** (`direct`, `channel`, `tracing_nb`) write
+Two families: **transport baselines** (`direct`, `channel`, `tracing_nb`, `tokio_fs`) write
 raw payload bytes with no formatting; **real crates** (`log_facade`,
 `slog_logger`, `tracing_full`, `ftlog_logger`) drive the crate's real macro →
 format → sink path. Real-crate backends use `record_str()` to turn the payload

@@ -8,7 +8,7 @@ use std::str::FromStr;
 /// There are two families here:
 ///
 /// * **Transport baselines** ([`Strategy::Direct`], [`Strategy::Crossbeam`],
-///   [`Strategy::Flume`], [`Strategy::TracingAppender`]) write *raw bytes* to a
+///   [`Strategy::Flume`], [`Strategy::TracingAppender`], [`Strategy::TokioFs`]) write *raw bytes* to a
 ///   file behind various hand-off mechanisms. They isolate the cost of the
 ///   transport itself (lock vs. channel vs. non-blocking queue) with no
 ///   formatting overhead.
@@ -43,6 +43,11 @@ pub enum Strategy {
     /// The `tracing-appender` `NonBlocking` writer — the same machinery the
     /// `tracing` ecosystem uses for non-blocking file logging.
     TracingAppender,
+    /// A tokio mpsc channel feeding a writer task on a dedicated tokio runtime
+    /// that writes through an async `tokio::fs::File` (behind a tokio
+    /// `BufWriter`), draining records in batches to limit the number of I/O
+    /// operations.
+    TokioFs,
 
     // --- real `log`-facade backends (install one global logger per process) ---
     /// The `log` facade with the `env_logger` backend writing to a file.
@@ -85,11 +90,12 @@ impl Strategy {
     /// The transport-baseline strategies, in a stable order. This is the default
     /// `--strategies all` set: none of them install process-global state, so
     /// they can all be swept inside a single process.
-    pub const ALL: [Strategy; 4] = [
+    pub const ALL: [Strategy; 5] = [
         Strategy::Direct,
         Strategy::Crossbeam,
         Strategy::Flume,
         Strategy::TracingAppender,
+        Strategy::TokioFs,
     ];
 
     /// The real-logging-crate strategies, in a stable order. Most of these
@@ -109,11 +115,12 @@ impl Strategy {
     ];
 
     /// Every strategy, transport baselines first then real crates.
-    pub const EVERY: [Strategy; 14] = [
+    pub const EVERY: [Strategy; 15] = [
         Strategy::Direct,
         Strategy::Crossbeam,
         Strategy::Flume,
         Strategy::TracingAppender,
+        Strategy::TokioFs,
         Strategy::LogEnvLogger,
         Strategy::LogFern,
         Strategy::LogLog4rs,
@@ -133,6 +140,7 @@ impl Strategy {
             Strategy::Crossbeam => "crossbeam",
             Strategy::Flume => "flume",
             Strategy::TracingAppender => "tracing-appender",
+            Strategy::TokioFs => "tokio-fs",
             Strategy::LogEnvLogger => "env_logger",
             Strategy::LogFern => "fern",
             Strategy::LogLog4rs => "log4rs",
@@ -160,7 +168,11 @@ impl Strategy {
     pub fn is_real_crate(self) -> bool {
         !matches!(
             self,
-            Strategy::Direct | Strategy::Crossbeam | Strategy::Flume | Strategy::TracingAppender
+            Strategy::Direct
+                | Strategy::Crossbeam
+                | Strategy::Flume
+                | Strategy::TracingAppender
+                | Strategy::TokioFs
         )
     }
 
@@ -192,6 +204,7 @@ impl Strategy {
             Strategy::Crossbeam
                 | Strategy::Flume
                 | Strategy::TracingAppender
+                | Strategy::TokioFs
                 | Strategy::SlogAsync
                 | Strategy::TracingNonBlocking
                 | Strategy::TracingJson
@@ -220,6 +233,7 @@ impl FromStr for Strategy {
             "crossbeam" | "crossbeam-channel" => Ok(Strategy::Crossbeam),
             "flume" => Ok(Strategy::Flume),
             "tracing-appender" | "appender" => Ok(Strategy::TracingAppender),
+            "tokio-fs" | "tokio" | "tokio-file" => Ok(Strategy::TokioFs),
             "env_logger" | "env-logger" | "envlogger" => Ok(Strategy::LogEnvLogger),
             "fern" => Ok(Strategy::LogFern),
             "log4rs" => Ok(Strategy::LogLog4rs),
@@ -236,7 +250,7 @@ impl FromStr for Strategy {
             "ftlog" => Ok(Strategy::Ftlog),
             other => Err(format!(
                 "unknown strategy '{other}' (expected one of: direct, crossbeam, flume, \
-                 tracing-appender, env_logger, fern, log4rs, flexi_logger, slog-async, \
+                 tracing-appender, tokio-fs, env_logger, fern, log4rs, flexi_logger, slog-async, \
                  tracing-fmt, tracing-nb, tracing-span, tracing-json, ftlog)"
             )),
         }
